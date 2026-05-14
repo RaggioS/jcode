@@ -533,6 +533,7 @@ pub(super) async fn handle_set_compaction_mode(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_notify_auth_changed(
     id: u64,
     provider_hint: Option<String>,

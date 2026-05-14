@@ -324,15 +324,15 @@ fn apply_auth_provider_runtime(provider_id: Option<&str>) -> Option<String> {
             }
         }
         Some(provider_id) => {
-            if let Some(activation) = direct_provider_activation(provider_id) {
-                if let Err(error) = activation.apply_env() {
-                    let message = error.to_string();
-                    crate::logging::auth_event(
-                        "auth_changed_runtime_activation_failed",
-                        provider_id,
-                        &[("reason", message.as_str())],
-                    );
-                }
+            if let Some(activation) = direct_provider_activation(provider_id)
+                && let Err(error) = activation.apply_env()
+            {
+                let message = error.to_string();
+                crate::logging::auth_event(
+                    "auth_changed_runtime_activation_failed",
+                    provider_id,
+                    &[("reason", message.as_str())],
+                );
             }
             None
         }

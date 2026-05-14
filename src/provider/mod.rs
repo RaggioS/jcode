@@ -707,12 +707,10 @@ impl MultiProvider {
         if let Some(pref) = default_provider.and_then(|pref| {
             let trimmed = pref.trim();
             (!trimmed.is_empty()).then_some(trimmed)
-        }) {
-            if let Some(selection) =
-                Self::resolve_config_provider_selection(pref, crate::config::config())
-            {
-                return self.set_model_on_provider(selection.active_provider(), model);
-            }
+        }) && let Some(selection) =
+            Self::resolve_config_provider_selection(pref, crate::config::config())
+        {
+            return self.set_model_on_provider(selection.active_provider(), model);
         }
 
         self.set_model(model)

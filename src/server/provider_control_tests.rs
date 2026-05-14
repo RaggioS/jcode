@@ -921,11 +921,11 @@ async fn auth_model_first_prompt_e2e_state_space_is_bounded_by_selection_source(
             loop {
                 match client_event_rx.recv().await {
                     Some(ServerEvent::ModelChanged {
-                        id,
+                        id: 248,
                         model: changed,
                         error,
                         ..
-                    }) if id == 248 => {
+                    }) => {
                         assert_eq!(error, None, "{}: manual model switch failed", scenario.name);
                         assert_eq!(
                             changed, model,
