@@ -334,6 +334,7 @@ fn openai_compatible_profiles_with_unverified_live_catalogs_have_static_fallback
             jcode_provider_metadata::FIREWORKS_PROFILE,
             "accounts/fireworks/routers/kimi-k2p5-turbo",
         ),
+        (jcode_provider_metadata::XIAOMI_MIMO_PROFILE, "mimo-v2.5"),
         (
             jcode_provider_metadata::ALIBABA_CODING_PLAN_PROFILE,
             "qwen3-coder-plus",
