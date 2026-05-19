@@ -267,7 +267,16 @@ pub(crate) fn welcome_hero_reveal_progress_for_elapsed(elapsed: Duration) -> f32
 }
 
 pub(crate) fn welcome_hero_runtime_mask_supported(phrase: &str) -> bool {
-    phrase.trim().eq_ignore_ascii_case("Hello there")
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let enabled = *ENABLED.get_or_init(|| {
+        std::env::var_os("JCODE_DESKTOP_RUNTIME_HERO_MASK").is_some_and(|value| {
+            !matches!(
+                value.to_string_lossy().trim().to_ascii_lowercase().as_str(),
+                "" | "0" | "false" | "off" | "no"
+            )
+        })
+    });
+    enabled && phrase.trim().eq_ignore_ascii_case("Hello there")
 }
 
 pub(crate) fn welcome_hero_runtime_mask_rect(

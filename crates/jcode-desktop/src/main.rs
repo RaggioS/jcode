@@ -238,7 +238,10 @@ fn main() -> Result<()> {
 async fn run() -> Result<()> {
     let args = std::env::args().collect::<Vec<_>>();
     let startup_benchmark = startup_benchmark_requested(&args);
-    let startup_trace = DesktopStartupTrace::new(startup_benchmark || startup_log_requested(&args));
+    let startup_content_benchmark = startup_content_benchmark_requested(&args);
+    let startup_trace = DesktopStartupTrace::new(
+        startup_benchmark || startup_content_benchmark || startup_log_requested(&args),
+    );
     startup_trace.mark("args parsed");
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
         println!("{}", desktop_help_text());
@@ -322,6 +325,7 @@ async fn run() -> Result<()> {
     spawn_session_event_forwarder(session_event_rx, event_loop_proxy.clone());
     let mut recovery_scan_pending = app.is_single_session();
     let mut first_frame_presented = false;
+    let mut first_content_frame_presented = false;
     let mut interaction_latency = DesktopInteractionLatencyProfiler::new();
     let mut no_paint_watchdog = DesktopNoPaintWatchdog::new();
     let mut last_backend_redraw_request: Option<Instant> = None;
@@ -799,6 +803,14 @@ async fn run() -> Result<()> {
                                 );
                             }
                         }
+                        if frame.content_ready && !first_content_frame_presented {
+                            first_content_frame_presented = true;
+                            startup_trace.mark("first content frame presented");
+                        }
+                        if startup_content_benchmark && frame.content_ready {
+                            target.exit();
+                            return;
+                        }
                         if frame.animation_active {
                             window.request_redraw();
                         }
@@ -1253,6 +1265,10 @@ fn startup_log_requested(args: &[String]) -> bool {
 
 fn startup_benchmark_requested(args: &[String]) -> bool {
     args.iter().any(|arg| arg == "--startup-benchmark")
+}
+
+fn startup_content_benchmark_requested(args: &[String]) -> bool {
+    args.iter().any(|arg| arg == "--startup-content-benchmark")
 }
 
 fn scroll_render_benchmark_frames(args: &[String]) -> Option<usize> {
@@ -3630,6 +3646,60 @@ fn spawn_desktop_font_system_loader() -> JoinHandle<FontSystem> {
     std::thread::spawn(create_desktop_font_system)
 }
 
+#[cfg(target_os = "linux")]
+fn desktop_wgpu_startup_backends() -> Vec<wgpu::Backends> {
+    vec![wgpu::Backends::PRIMARY]
+}
+
+#[cfg(not(target_os = "linux"))]
+fn desktop_wgpu_startup_backends() -> Vec<wgpu::Backends> {
+    vec![wgpu::Backends::PRIMARY]
+}
+
+async fn request_startup_adapter<'window>(
+    window: &'window Window,
+    backend_candidates: Vec<wgpu::Backends>,
+    startup_trace: DesktopStartupTrace,
+) -> Result<(wgpu::Surface<'window>, wgpu::Adapter)> {
+    let mut last_error = None;
+    for backends in backend_candidates {
+        let backend_label = format!("{backends:?}");
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends,
+            flags: wgpu::InstanceFlags::empty().with_env(),
+            ..Default::default()
+        });
+        startup_trace.mark(&format!("wgpu instance created ({backend_label})"));
+        let surface = match instance.create_surface(window) {
+            Ok(surface) => surface,
+            Err(error) => {
+                last_error = Some(format!(
+                    "{backend_label}: failed to create surface: {error:#}"
+                ));
+                continue;
+            }
+        };
+        startup_trace.mark(&format!("wgpu surface created ({backend_label})"));
+        if let Some(adapter) = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::LowPower,
+                compatible_surface: Some(&surface),
+                force_fallback_adapter: false,
+            })
+            .await
+        {
+            startup_trace.mark(&format!("wgpu adapter selected ({backend_label})"));
+            return Ok((surface, adapter));
+        }
+        last_error = Some(format!("{backend_label}: no compatible adapter"));
+    }
+
+    match last_error {
+        Some(error) => anyhow::bail!("failed to find a compatible GPU adapter ({error})"),
+        None => anyhow::bail!("failed to find a compatible GPU adapter"),
+    }
+}
+
 fn desktop_scroll_benchmark_app() -> SingleSessionApp {
     desktop_scroll_benchmark_app_with_turns(320)
 }
@@ -4988,6 +5058,7 @@ struct DesktopFrameContext {
 #[derive(Clone, Copy)]
 struct DesktopRenderFrameResult {
     animation_active: bool,
+    content_ready: bool,
     frame_wall: Duration,
     frame_cpu: Duration,
     context: DesktopFrameContext,
@@ -5562,8 +5633,9 @@ struct Canvas<'window> {
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
-    render_pipeline: wgpu::RenderPipeline,
-    hero_mask_renderer: HeroMaskRenderer,
+    render_pipeline: Option<wgpu::RenderPipeline>,
+    hero_mask_renderer: Option<HeroMaskRenderer>,
+    font_system_loader: Option<JoinHandle<FontSystem>>,
     font_system: Option<FontSystem>,
     swash_cache: SwashCache,
     text_atlas: Option<TextAtlas>,
@@ -5581,6 +5653,7 @@ struct Canvas<'window> {
     primitive_vertices_cache: Vec<Vertex>,
     primitive_frame_vertices: Vec<Vertex>,
     needs_initial_frame: bool,
+    boot_frame_presented: bool,
     first_render_completed: bool,
     defer_initial_text_frame: bool,
     single_session_text_cache_key: Option<u64>,
@@ -5604,25 +5677,10 @@ struct Canvas<'window> {
 impl<'window> Canvas<'window> {
     async fn new(window: &'window Window, startup_trace: DesktopStartupTrace) -> Result<Self> {
         let size = non_zero_size(window.inner_size());
-        let mut font_system_loader = Some(spawn_desktop_font_system_loader());
+        let font_system_loader = Some(spawn_desktop_font_system_loader());
         startup_trace.mark("font loader spawned");
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::PRIMARY,
-            ..Default::default()
-        });
-        startup_trace.mark("wgpu instance created");
-        let surface = instance
-            .create_surface(window)
-            .context("failed to create wgpu surface")?;
-        startup_trace.mark("wgpu surface created");
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::LowPower,
-                compatible_surface: Some(&surface),
-                force_fallback_adapter: false,
-            })
-            .await
-            .context("failed to find a compatible GPU adapter")?;
+        let (surface, adapter) =
+            request_startup_adapter(window, desktop_wgpu_startup_backends(), startup_trace).await?;
         startup_trace.mark("wgpu adapter ready");
         let (device, queue) = adapter
             .request_device(
@@ -5668,75 +5726,20 @@ impl<'window> Canvas<'window> {
         };
         surface.configure(&device, &config);
         startup_trace.mark("surface configured");
-
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("jcode-desktop-primitive-shader"),
-            source: wgpu::ShaderSource::Wgsl(SHADER.into()),
-        });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("jcode-desktop-primitive-pipeline-layout"),
-            bind_group_layouts: &[],
-            push_constant_ranges: &[],
-        });
-        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("jcode-desktop-primitive-pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: "vs_main",
-                buffers: &[Vertex::layout()],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: "fs_main",
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-        });
-        startup_trace.mark("primitive pipeline ready");
-        let hero_mask_renderer = HeroMaskRenderer::new(&device, format);
-        startup_trace.mark("hero mask pipeline ready");
-        let font_system = font_system_loader
-            .take()
-            .and_then(|loader| loader.join().ok())
-            .unwrap_or_else(create_desktop_font_system);
-        let mut text_atlas = TextAtlas::new(&device, &queue, format);
-        let text_renderer = TextRenderer::new(
-            &mut text_atlas,
-            &device,
-            wgpu::MultisampleState::default(),
-            None,
-        );
-        startup_trace.mark("text renderer ready");
+        startup_trace.mark("first-frame GPU core ready");
         let swash_cache = SwashCache::new();
-        let text_renderer = text_renderer;
-        startup_trace.mark("text renderer prewarm deferred");
         Ok(Self {
             surface,
             device,
             queue,
             config,
-            render_pipeline,
-            hero_mask_renderer,
-            font_system: Some(font_system),
+            render_pipeline: None,
+            hero_mask_renderer: None,
+            font_system_loader,
+            font_system: None,
             swash_cache,
-            text_atlas: Some(text_atlas),
-            text_renderer: Some(text_renderer),
+            text_atlas: None,
+            text_renderer: None,
             text_needs_prepare: true,
             streaming_text_atlas: None,
             streaming_text_renderer: None,
@@ -5750,8 +5753,9 @@ impl<'window> Canvas<'window> {
             primitive_vertices_cache: Vec::new(),
             primitive_frame_vertices: Vec::new(),
             needs_initial_frame: true,
+            boot_frame_presented: false,
             first_render_completed: false,
-            defer_initial_text_frame: true,
+            defer_initial_text_frame: false,
             single_session_text_cache_key: None,
             single_session_text_key: None,
             single_session_text_buffers: Vec::new(),
@@ -6046,7 +6050,70 @@ impl<'window> Canvas<'window> {
         if self.font_system.is_some() {
             return;
         }
-        self.font_system = Some(create_desktop_font_system());
+        self.font_system = Some(
+            self.font_system_loader
+                .take()
+                .and_then(|loader| loader.join().ok())
+                .unwrap_or_else(create_desktop_font_system),
+        );
+    }
+
+    fn ensure_render_pipeline(&mut self) {
+        if self.render_pipeline.is_some() {
+            return;
+        }
+        let shader = self
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("jcode-desktop-primitive-shader"),
+                source: wgpu::ShaderSource::Wgsl(SHADER.into()),
+            });
+        let pipeline_layout = self
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("jcode-desktop-primitive-pipeline-layout"),
+                bind_group_layouts: &[],
+                push_constant_ranges: &[],
+            });
+        self.render_pipeline = Some(self.device.create_render_pipeline(
+            &wgpu::RenderPipelineDescriptor {
+                label: Some("jcode-desktop-primitive-pipeline"),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: "vs_main",
+                    buffers: &[Vertex::layout()],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: "fs_main",
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: self.config.format,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: None,
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    unclipped_depth: false,
+                    conservative: false,
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+            },
+        ));
+    }
+
+    fn ensure_hero_mask_renderer(&mut self) {
+        if self.hero_mask_renderer.is_some() {
+            return;
+        }
+        self.hero_mask_renderer = Some(HeroMaskRenderer::new(&self.device, self.config.format));
     }
 
     fn ensure_text_renderer(&mut self) {
@@ -6161,12 +6228,72 @@ impl<'window> Canvas<'window> {
         (progress, welcome_hero_reveal_is_active(progress))
     }
 
+    fn render_boot_frame(&mut self) -> std::result::Result<DesktopRenderFrameResult, SurfaceError> {
+        let mut frame_profile = DesktopFrameProfile::new();
+        let frame = self.surface.get_current_texture()?;
+        frame_profile.checkpoint("surface_acquire");
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("jcode-desktop-boot-frame"),
+            });
+        frame_profile.checkpoint("frame_setup");
+        {
+            let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("jcode-desktop-boot-clear-pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(CLEAR_COLOR),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+        }
+        frame_profile.checkpoint("render_pass");
+        self.queue.submit(Some(encoder.finish()));
+        frame_profile.checkpoint("queue_submit");
+        frame.present();
+        frame_profile.checkpoint("present");
+        self.boot_frame_presented = true;
+        let frame_wall = frame_profile.total_duration();
+        let frame_cpu = frame_profile.cpu_duration();
+        let context = DesktopFrameContext {
+            mode: "boot",
+            smooth_scroll_lines: 0.0,
+            text_buffer_count: 0,
+            text_area_count: 0,
+            primitive_vertices: 0,
+            text_prepared: false,
+            primitive_geometry_cache_hit: false,
+        };
+        self.frame_profiler.observe(frame_profile, context);
+        Ok(DesktopRenderFrameResult {
+            animation_active: true,
+            content_ready: false,
+            frame_wall,
+            frame_cpu,
+            context,
+        })
+    }
+
     fn render(
         &mut self,
         app: &DesktopApp,
         monitor_size: Option<PhysicalSize<u32>>,
         smooth_scroll_lines: f32,
     ) -> std::result::Result<DesktopRenderFrameResult, SurfaceError> {
+        if !self.boot_frame_presented {
+            return self.render_boot_frame();
+        }
+
         let mut frame_profile = DesktopFrameProfile::new();
         let frame = self.surface.get_current_texture()?;
         frame_profile.checkpoint("surface_acquire");
@@ -6237,6 +6364,8 @@ impl<'window> Canvas<'window> {
             self.ensure_streaming_text_renderer();
         }
         frame_profile.checkpoint("text_renderer");
+        self.ensure_render_pipeline();
+        frame_profile.checkpoint("primitive_pipeline");
         let text_buffers = &self.single_session_text_buffers;
         let has_text_buffers = !text_buffers.is_empty();
         let has_streaming_text_buffer = self.single_session_streaming_text_buffer.is_some();
@@ -6495,13 +6624,18 @@ impl<'window> Canvas<'window> {
         } else {
             None
         };
-        let hero_mask_prepared = self.hero_mask_renderer.prepare(
-            &self.device,
-            &self.queue,
-            self.size,
-            hero_mask_spec.as_ref(),
-            welcome_hero_reveal_progress,
-        );
+        if hero_mask_spec.is_some() {
+            self.ensure_hero_mask_renderer();
+        }
+        let hero_mask_prepared = self.hero_mask_renderer.as_mut().is_some_and(|renderer| {
+            renderer.prepare(
+                &self.device,
+                &self.queue,
+                self.size,
+                hero_mask_spec.as_ref(),
+                welcome_hero_reveal_progress,
+            )
+        });
         frame_profile.checkpoint("hero_mask_prepare");
 
         {
@@ -6519,13 +6653,17 @@ impl<'window> Canvas<'window> {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
-            render_pass.set_pipeline(&self.render_pipeline);
+            if let Some(render_pipeline) = self.render_pipeline.as_ref() {
+                render_pass.set_pipeline(render_pipeline);
+            }
             if let Some(vertex_buffer) = self.primitive_vertex_buffer.as_ref() {
                 render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
                 render_pass.draw(0..primitive_vertex_count as u32, 0..1);
             }
             if hero_mask_prepared {
-                self.hero_mask_renderer.render_prepared(&mut render_pass);
+                if let Some(hero_mask_renderer) = self.hero_mask_renderer.as_ref() {
+                    hero_mask_renderer.render_prepared(&mut render_pass);
+                }
             }
             if has_text_buffers
                 && let (Some(text_renderer), Some(text_atlas)) =
@@ -6577,6 +6715,7 @@ impl<'window> Canvas<'window> {
             animation_active: animation_active
                 || defer_text_this_frame
                 || defer_hero_mask_this_frame,
+            content_ready: text_prepared && !defer_text_this_frame && !defer_hero_mask_this_frame,
             frame_wall,
             frame_cpu,
             context,
