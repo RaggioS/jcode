@@ -879,9 +879,9 @@ impl Provider for OpenRouterProvider {
                         .unwrap_or_else(|| static_model_ids.contains(&model));
                 let route_detail = if fallback_not_live {
                     if detail.trim().is_empty() {
-                        "fallback: not from live /models catalog".to_string()
+                        "fallback: static provider model list".to_string()
                     } else {
-                        format!("{}; fallback: not from live /models catalog", detail)
+                        format!("{}; fallback: static provider model list", detail)
                     }
                 } else {
                     detail.clone()

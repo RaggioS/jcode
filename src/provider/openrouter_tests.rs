@@ -915,7 +915,7 @@ fn direct_openai_compatible_static_models_are_marked_as_fallback_before_live_cat
     assert!(
         route
             .detail
-            .contains("fallback: not from live /models catalog"),
+            .contains("fallback: static provider model list"),
         "fallback routes should be clearly labeled in the model picker: {route:?}"
     );
 }

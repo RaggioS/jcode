@@ -108,10 +108,10 @@ fn direct_openai_compatible_profile_routes(
     let detail = if from_live_catalog {
         resolved.api_base.clone()
     } else if resolved.api_base.trim().is_empty() {
-        "fallback: not from live /models catalog".to_string()
+        "fallback: static provider model list".to_string()
     } else {
         format!(
-            "{}; fallback: not from live /models catalog",
+            "{}; fallback: static provider model list",
             resolved.api_base
         )
     };

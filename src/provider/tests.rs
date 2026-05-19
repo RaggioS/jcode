@@ -271,7 +271,7 @@ fn configured_openai_compatible_profile_routes_use_live_cache_when_not_active_pr
                     && route.api_method == "openai-compatible:opencode"
                     && !route
                         .detail
-                        .contains("fallback: not from live /models catalog")),
+                        .contains("fallback: static provider model list")),
             "non-active configured direct profile should expose its live /models cache, routes: {opencode_routes:?}"
         );
         assert!(
