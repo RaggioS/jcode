@@ -45,6 +45,7 @@ const DESKTOP_SLASH_COMMANDS: &[(&str, &str)] = &[
     ("/new", "reset to a fresh desktop session"),
     ("/resume", "open the recent session switcher"),
     ("/sessions", "open the recent session switcher"),
+    ("/session", "alias for /sessions"),
     ("/model [name]", "open model picker or switch to a model"),
     ("/models", "alias for /model"),
     ("/refresh-model-list", "refresh provider model catalogs"),
@@ -66,8 +67,10 @@ const DESKTOP_SLASH_COMMANDS: &[(&str, &str)] = &[
     ),
     ("/commit", "make logical commits from current changes"),
     ("/stop", "interrupt the running generation"),
+    ("/cancel", "alias for /stop"),
     ("/status", "show current desktop session status"),
     ("/quit", "exit the desktop app"),
+    ("/exit", "alias for /quit"),
 ];
 pub(crate) const DESKTOP_SLASH_SUGGESTION_ROW_LIMIT: usize = 7;
 
@@ -3947,12 +3950,15 @@ impl SingleSessionApp {
             "/clear",
             "/new",
             "/sessions",
+            "/session",
             "/model",
             "/copy",
             "/search",
             "/stop",
+            "/cancel",
             "/status",
             "/quit",
+            "/exit",
         ];
         let Some((draft, cursor)) =
             complete_slash_command(&self.draft, self.draft_cursor, DESKTOP_SLASH_COMPLETIONS)

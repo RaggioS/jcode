@@ -1007,6 +1007,38 @@ fn single_session_slash_suggestions_keep_prefix_matches_before_fuzzy_matches() {
 }
 
 #[test]
+fn single_session_slash_suggestions_expose_accepted_aliases() {
+    let mut app = SingleSessionApp::new(None);
+    app.handle_key(KeyInput::Character("/can".to_string()));
+
+    let suggestions = app
+        .inline_widget_styled_lines()
+        .into_iter()
+        .map(|line| line.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(suggestions.contains("/cancel"), "{suggestions}");
+
+    assert_eq!(app.handle_key(KeyInput::Autocomplete), KeyOutcome::Redraw);
+    assert_eq!(app.draft, "/cancel");
+    app.draft.clear();
+    app.draft_cursor = 0;
+
+    app.handle_key(KeyInput::Character("/help".to_string()));
+    assert_eq!(app.handle_key(KeyInput::SubmitDraft), KeyOutcome::Redraw);
+    let help = app
+        .inline_widget_styled_lines()
+        .into_iter()
+        .map(|line| line.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(help.contains("/session"), "{help}");
+    assert!(help.contains("/cancel"), "{help}");
+    assert!(help.contains("/exit"), "{help}");
+}
+
+#[test]
 fn single_session_slash_suggestions_filter_select_and_submit() {
     let mut app = SingleSessionApp::new(None);
 
