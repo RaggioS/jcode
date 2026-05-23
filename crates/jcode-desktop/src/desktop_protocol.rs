@@ -186,9 +186,57 @@ pub(crate) struct DesktopWorkerMetricBatch {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct DesktopWorkerMetric {
-    pub(crate) name: String,
+    pub(crate) name: DesktopMetricName,
     pub(crate) value: f64,
-    pub(crate) unit: String,
+    pub(crate) unit: DesktopMetricUnit,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) enum DesktopMetricName {
+    WindowCreated,
+    EventLoopEntered,
+    WgpuInitStarted,
+    WgpuReady,
+    FirstHostPixels,
+    FirstGpuFrame,
+    FirstLiveContentFrame,
+    WorkerSpawned,
+    WorkerReady,
+    WorkerRestarted,
+    ReloadBlackout,
+}
+
+impl DesktopMetricName {
+    pub(crate) fn as_str(&self) -> &'static str {
+        match self {
+            Self::WindowCreated => "window_created",
+            Self::EventLoopEntered => "event_loop_entered",
+            Self::WgpuInitStarted => "wgpu_init_started",
+            Self::WgpuReady => "wgpu_ready",
+            Self::FirstHostPixels => "first_host_pixels",
+            Self::FirstGpuFrame => "first_gpu_frame",
+            Self::FirstLiveContentFrame => "first_live_content_frame",
+            Self::WorkerSpawned => "worker_spawned",
+            Self::WorkerReady => "worker_ready",
+            Self::WorkerRestarted => "worker_restarted",
+            Self::ReloadBlackout => "reload_blackout",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) enum DesktopMetricUnit {
+    Milliseconds,
+    Count,
+}
+
+impl DesktopMetricUnit {
+    pub(crate) fn as_str(&self) -> &'static str {
+        match self {
+            Self::Milliseconds => "ms",
+            Self::Count => "count",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -245,6 +293,51 @@ mod tests {
             DesktopWorkerToHostMessage::Scene(DesktopSceneUpdate {
                 scene: DesktopScene::default(),
                 animation_active: false,
+            }),
+        );
+
+        let encoded = serde_json::to_string(&message).expect("serialize message");
+        let decoded: DesktopProtocolEnvelope<DesktopWorkerToHostMessage> =
+            serde_json::from_str(&encoded).expect("deserialize message");
+
+        assert_eq!(decoded, message);
+    }
+
+    #[test]
+    fn metric_names_cover_reload_and_startup_milestones() {
+        let names = [
+            DesktopMetricName::WindowCreated,
+            DesktopMetricName::EventLoopEntered,
+            DesktopMetricName::WgpuInitStarted,
+            DesktopMetricName::WgpuReady,
+            DesktopMetricName::FirstHostPixels,
+            DesktopMetricName::FirstGpuFrame,
+            DesktopMetricName::FirstLiveContentFrame,
+            DesktopMetricName::WorkerSpawned,
+            DesktopMetricName::WorkerReady,
+            DesktopMetricName::WorkerRestarted,
+            DesktopMetricName::ReloadBlackout,
+        ];
+        let labels = names
+            .iter()
+            .map(DesktopMetricName::as_str)
+            .collect::<Vec<_>>();
+
+        assert_eq!(labels.len(), 11);
+        assert!(labels.contains(&"first_host_pixels"));
+        assert!(labels.contains(&"reload_blackout"));
+    }
+
+    #[test]
+    fn worker_metrics_round_trip_with_typed_names() {
+        let message = DesktopProtocolEnvelope::new(
+            10,
+            DesktopWorkerToHostMessage::Metrics(DesktopWorkerMetricBatch {
+                metrics: vec![DesktopWorkerMetric {
+                    name: DesktopMetricName::ReloadBlackout,
+                    value: 12.5,
+                    unit: DesktopMetricUnit::Milliseconds,
+                }],
             }),
         );
 
