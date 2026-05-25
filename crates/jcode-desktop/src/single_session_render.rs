@@ -6301,7 +6301,7 @@ pub(crate) fn push_single_session_caret(
 pub(crate) struct CaretPosition {
     pub(crate) x: f32,
     pub(crate) y: f32,
-    height: f32,
+    pub(crate) height: f32,
 }
 
 pub(crate) fn glyphon_draft_caret_position(
@@ -6309,7 +6309,7 @@ pub(crate) fn glyphon_draft_caret_position(
     draft_buffer: &Buffer,
     size: PhysicalSize<u32>,
 ) -> Option<CaretPosition> {
-    let typography = single_session_typography();
+    let typography = single_session_typography_for_scale(app.text_scale());
     let target = app.composer_cursor_line_byte_index();
     let target_line = target.0;
     let target_index = target.1;
@@ -6358,11 +6358,11 @@ pub(crate) fn glyphon_draft_caret_position(
     fallback
 }
 
-fn approximate_draft_caret_position(
+pub(crate) fn approximate_draft_caret_position(
     app: &SingleSessionApp,
     size: PhysicalSize<u32>,
 ) -> CaretPosition {
-    let typography = single_session_typography();
+    let typography = single_session_typography_for_scale(app.text_scale());
     let line_height = typography.code_size * typography.code_line_height;
     let draft_top = single_session_draft_top_for_app(app, size);
     let (cursor_line, cursor_column) = app.draft_cursor_line_col();

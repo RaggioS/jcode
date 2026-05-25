@@ -8130,6 +8130,22 @@ fn glyphon_caret_position_uses_shaped_draft_buffer() {
 }
 
 #[test]
+fn fallback_draft_caret_position_uses_text_scale() {
+    let mut app = SingleSessionApp::new(None);
+    app.handle_key(KeyInput::Character("hello\nworld".to_string()));
+    app.handle_key(KeyInput::AdjustTextScale(1));
+    let size = PhysicalSize::new(640, 480);
+
+    let caret = approximate_draft_caret_position(&app, size);
+    let typography = single_session_typography_for_scale(app.text_scale());
+    let expected_y = single_session_draft_top_for_app(&app, size)
+        + typography.code_size * typography.code_line_height;
+
+    assert_eq!(caret.y, expected_y);
+    assert_eq!(caret.height, typography.code_size * 1.12);
+}
+
+#[test]
 fn composer_draft_buffer_rebuilds_when_user_font_changes() {
     let mut app = SingleSessionApp::new(None);
     app.handle_key(KeyInput::Character("stale input".to_string()));
