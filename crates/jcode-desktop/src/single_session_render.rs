@@ -26,6 +26,10 @@ pub(crate) const MARKDOWN_TASK_OPEN_COLOR: [f32; 4] = [0.420, 0.320, 0.075, 0.98
 pub(crate) const MARKDOWN_STRIKE_TEXT_COLOR: [f32; 4] = [0.310, 0.330, 0.380, 0.880];
 pub(crate) const STREAMING_ACTIVITY_PILL_COLOR: [f32; 4] = [0.965, 0.985, 1.000, 0.58];
 pub(crate) const STREAMING_ACTIVITY_PILL_BORDER_COLOR: [f32; 4] = [0.000, 0.260, 0.720, 0.18];
+const STREAMING_ACTIVITY_CUE_ENTRY_DURATION: Duration = Duration::from_millis(145);
+const STREAMING_ACTIVITY_CUE_EXIT_DURATION: Duration = Duration::from_millis(130);
+const STREAMING_ACTIVITY_CUE_ENTRY_OFFSET_PIXELS: f32 = 7.0;
+const STREAMING_ACTIVITY_CUE_ENTRY_SCALE: f32 = 0.94;
 const INLINE_WIDGET_CARD_SHADOW_COLOR: [f32; 4] = [0.020, 0.035, 0.070, 0.080];
 pub(crate) const INLINE_WIDGET_CARD_BACKGROUND_COLOR: [f32; 4] = [0.992, 0.996, 1.000, 0.72];
 const INLINE_WIDGET_CARD_BORDER_COLOR: [f32; 4] = [0.105, 0.185, 0.360, 0.20];
@@ -291,7 +295,7 @@ pub(crate) fn build_single_session_vertices_with_scroll_and_reveal(
         smooth_scroll_lines,
     );
     if app.has_activity_indicator() {
-        push_streaming_activity_cue(&mut vertices, app, size, spinner_tick, None);
+        push_streaming_activity_cue(&mut vertices, app, size, spinner_tick, None, None);
     }
     push_single_session_selection(&mut vertices, app, size);
     push_single_session_scrollbar(
@@ -334,6 +338,7 @@ pub(crate) fn build_single_session_vertices_with_cached_body(
         None,
         None,
         None,
+        None,
     )
 }
 
@@ -355,6 +360,7 @@ pub(crate) fn build_single_session_vertices_with_cached_body_and_tool_motion(
     transcript_message_motion: Option<&TranscriptMessageMotionFrame>,
     transcript_motion: Option<&TranscriptCardMotionFrame>,
     inline_markdown_motion: Option<&InlineMarkdownPillMotionFrame>,
+    activity_cue_motion: Option<&StreamingActivityCueMotionFrame>,
     tool_motion: &ToolCardMotionFrame,
     scrollbar_motion: Option<&SingleSessionScrollbarMotionFrame>,
 ) -> Vec<Vertex> {
@@ -375,6 +381,7 @@ pub(crate) fn build_single_session_vertices_with_cached_body_and_tool_motion(
         transcript_message_motion,
         transcript_motion,
         inline_markdown_motion,
+        activity_cue_motion,
         Some(tool_motion),
         scrollbar_motion,
     )
@@ -398,6 +405,7 @@ fn build_single_session_vertices_with_cached_body_internal(
     transcript_message_motion: Option<&TranscriptMessageMotionFrame>,
     transcript_motion: Option<&TranscriptCardMotionFrame>,
     inline_markdown_motion: Option<&InlineMarkdownPillMotionFrame>,
+    activity_cue_motion: Option<&StreamingActivityCueMotionFrame>,
     tool_motion: Option<&ToolCardMotionFrame>,
     scrollbar_motion: Option<&SingleSessionScrollbarMotionFrame>,
 ) -> Vec<Vertex> {
@@ -530,8 +538,17 @@ fn build_single_session_vertices_with_cached_body_internal(
         &viewport,
         rendered_body_lines.len(),
     );
-    if app.has_activity_indicator() {
-        push_streaming_activity_cue(&mut vertices, app, size, spinner_tick, Some(&viewport));
+    if app.has_activity_indicator()
+        || activity_cue_motion.is_some_and(|motion| motion.exiting().is_some())
+    {
+        push_streaming_activity_cue(
+            &mut vertices,
+            app,
+            size,
+            spinner_tick,
+            Some(&viewport),
+            activity_cue_motion,
+        );
     }
     push_single_session_selection(&mut vertices, app, size);
     push_single_session_scrollbar_for_total_lines(
@@ -2355,13 +2372,237 @@ fn transparent(mut color: [f32; 4]) -> [f32; 4] {
     color
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct StreamingActivityCueVisual {
+    opacity: f32,
+    y_offset_pixels: f32,
+    scale: f32,
+}
+
+impl StreamingActivityCueVisual {
+    fn settled() -> Self {
+        Self {
+            opacity: 1.0,
+            y_offset_pixels: 0.0,
+            scale: 1.0,
+        }
+    }
+
+    fn entry(progress: f32) -> Self {
+        let eased = ease_out_cubic_local(progress);
+        Self {
+            opacity: eased,
+            y_offset_pixels: STREAMING_ACTIVITY_CUE_ENTRY_OFFSET_PIXELS * (1.0 - eased),
+            scale: lerp_f32(STREAMING_ACTIVITY_CUE_ENTRY_SCALE, 1.0, eased),
+        }
+    }
+
+    fn exit(progress: f32) -> Self {
+        let eased = ease_out_cubic_local(progress);
+        Self {
+            opacity: 1.0 - eased,
+            y_offset_pixels: -STREAMING_ACTIVITY_CUE_ENTRY_OFFSET_PIXELS * 0.55 * eased,
+            scale: lerp_f32(1.0, 0.975, eased),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct StreamingActivityCueMotionFrame {
+    current: Option<StreamingActivityCueVisual>,
+    exiting: Option<StreamingActivityCueVisual>,
+    active: bool,
+    cache_key: u64,
+}
+
+impl StreamingActivityCueMotionFrame {
+    pub(crate) fn current(&self) -> Option<StreamingActivityCueVisual> {
+        self.current
+    }
+
+    pub(crate) fn exiting(&self) -> Option<StreamingActivityCueVisual> {
+        self.exiting
+    }
+
+    pub(crate) fn is_active(&self) -> bool {
+        self.active
+    }
+
+    pub(crate) fn cache_key(&self) -> u64 {
+        self.cache_key
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct StreamingActivityCueMotionRegistry {
+    initialized: bool,
+    visible: bool,
+    entered_at: Option<Instant>,
+    exiting_at: Option<Instant>,
+}
+
+impl StreamingActivityCueMotionRegistry {
+    pub(crate) fn frame(
+        &mut self,
+        app: &SingleSessionApp,
+        now: Instant,
+    ) -> StreamingActivityCueMotionFrame {
+        self.frame_for_visible(app.has_activity_indicator(), now)
+    }
+
+    fn frame_for_visible(
+        &mut self,
+        visible: bool,
+        now: Instant,
+    ) -> StreamingActivityCueMotionFrame {
+        let reduced_motion = crate::animation::desktop_reduced_motion_enabled();
+        if !self.initialized {
+            self.initialized = true;
+            self.visible = visible;
+            self.entered_at = None;
+            self.exiting_at = None;
+        } else if self.visible != visible {
+            if reduced_motion {
+                self.entered_at = None;
+                self.exiting_at = None;
+            } else if visible {
+                self.entered_at = Some(now);
+                self.exiting_at = None;
+            } else {
+                self.exiting_at = Some(now);
+                self.entered_at = None;
+            }
+            self.visible = visible;
+        }
+
+        if reduced_motion {
+            self.entered_at = None;
+            self.exiting_at = None;
+        }
+
+        let mut active = false;
+        let current = if visible {
+            let visual = if let Some(started_at) = self.entered_at {
+                let (progress, running) = timed_animation_progress(
+                    started_at,
+                    now,
+                    STREAMING_ACTIVITY_CUE_ENTRY_DURATION,
+                );
+                active |= running;
+                if running {
+                    StreamingActivityCueVisual::entry(progress)
+                } else {
+                    self.entered_at = None;
+                    StreamingActivityCueVisual::settled()
+                }
+            } else {
+                StreamingActivityCueVisual::settled()
+            };
+            Some(visual)
+        } else {
+            None
+        };
+
+        let exiting = if !visible {
+            self.exiting_at.and_then(|started_at| {
+                let (progress, running) =
+                    timed_animation_progress(started_at, now, STREAMING_ACTIVITY_CUE_EXIT_DURATION);
+                if running {
+                    active = true;
+                    Some(StreamingActivityCueVisual::exit(progress))
+                } else {
+                    self.exiting_at = None;
+                    None
+                }
+            })
+        } else {
+            None
+        };
+
+        StreamingActivityCueMotionFrame {
+            current,
+            exiting,
+            active,
+            cache_key: streaming_activity_cue_motion_cache_key(current, exiting, active),
+        }
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.initialized = false;
+        self.visible = false;
+        self.entered_at = None;
+        self.exiting_at = None;
+    }
+}
+
+fn streaming_activity_cue_motion_cache_key(
+    current: Option<StreamingActivityCueVisual>,
+    exiting: Option<StreamingActivityCueVisual>,
+    active: bool,
+) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    active.hash(&mut hasher);
+    current.is_some().hash(&mut hasher);
+    if let Some(visual) = current {
+        streaming_activity_cue_visual_hash(visual, &mut hasher);
+    }
+    exiting.is_some().hash(&mut hasher);
+    if let Some(visual) = exiting {
+        streaming_activity_cue_visual_hash(visual, &mut hasher);
+    }
+    hasher.finish()
+}
+
+fn streaming_activity_cue_visual_hash(
+    visual: StreamingActivityCueVisual,
+    hasher: &mut impl Hasher,
+) {
+    hash_f32(visual.opacity, hasher);
+    hash_f32(visual.y_offset_pixels, hasher);
+    hash_f32(visual.scale, hasher);
+}
+
 pub(crate) fn push_streaming_activity_cue(
     vertices: &mut Vec<Vertex>,
     app: &SingleSessionApp,
     size: PhysicalSize<u32>,
     tick: u64,
     viewport: Option<&SingleSessionBodyViewport>,
+    motion: Option<&StreamingActivityCueMotionFrame>,
 ) {
+    let current = if app.has_activity_indicator() {
+        Some(
+            motion
+                .and_then(StreamingActivityCueMotionFrame::current)
+                .unwrap_or_else(StreamingActivityCueVisual::settled),
+        )
+    } else {
+        None
+    };
+    let exiting = motion.and_then(StreamingActivityCueMotionFrame::exiting);
+    if current.is_none() && exiting.is_none() {
+        return;
+    }
+
+    if let Some(visual) = exiting {
+        push_streaming_activity_cue_visual(vertices, app, size, tick, viewport, visual);
+    }
+    if let Some(visual) = current {
+        push_streaming_activity_cue_visual(vertices, app, size, tick, viewport, visual);
+    }
+}
+
+fn push_streaming_activity_cue_visual(
+    vertices: &mut Vec<Vertex>,
+    app: &SingleSessionApp,
+    size: PhysicalSize<u32>,
+    tick: u64,
+    viewport: Option<&SingleSessionBodyViewport>,
+    visual: StreamingActivityCueVisual,
+) {
+    if visual.opacity <= 0.001 || visual.scale <= 0.05 {
+        return;
+    }
     let typography = single_session_typography();
     let body_top = single_session_body_top_for_app(app, size);
     let viewport = viewport
@@ -2377,15 +2618,19 @@ pub(crate) fn push_streaming_activity_cue(
     let cue_x = PANEL_TITLE_LEFT_PADDING;
     let cue_rect = Rect {
         x: cue_x,
-        y: cue_y,
+        y: cue_y + visual.y_offset_pixels,
         width: pill_width,
         height: pill_height,
     };
+    let cue_rect = scaled_rect(cue_rect, visual.scale);
     push_rounded_rect(
         vertices,
         cue_rect,
         pill_height * 0.5,
-        STREAMING_ACTIVITY_PILL_COLOR,
+        with_alpha(
+            STREAMING_ACTIVITY_PILL_COLOR,
+            STREAMING_ACTIVITY_PILL_COLOR[3] * visual.opacity,
+        ),
         size,
     );
     push_rounded_rect_border(
@@ -2393,7 +2638,10 @@ pub(crate) fn push_streaming_activity_cue(
         cue_rect,
         pill_height * 0.5,
         1.0,
-        STREAMING_ACTIVITY_PILL_BORDER_COLOR,
+        with_alpha(
+            STREAMING_ACTIVITY_PILL_BORDER_COLOR,
+            STREAMING_ACTIVITY_PILL_BORDER_COLOR[3] * visual.opacity,
+        ),
         size,
     );
 
@@ -2411,7 +2659,7 @@ pub(crate) fn push_streaming_activity_cue(
         } else {
             0.46
         };
-        dot_color[3] = (base_alpha + 0.38 * dot_pulse).clamp(0.30, 0.86);
+        dot_color[3] = (base_alpha + 0.38 * dot_pulse).clamp(0.30, 0.86) * visual.opacity;
         push_rounded_rect(
             vertices,
             Rect {
@@ -10227,6 +10475,93 @@ mod tests {
                 changed_preview_target
             ))
         );
+    }
+
+    #[test]
+    fn streaming_activity_cue_motion_animates_entry_and_exit() {
+        let mut registry = StreamingActivityCueMotionRegistry::default();
+        let now = Instant::now();
+
+        let idle = registry.frame_for_visible(false, now);
+        assert!(!idle.is_active());
+        assert!(idle.current().is_none());
+        assert!(idle.exiting().is_none());
+
+        let entry_start = registry.frame_for_visible(true, now + Duration::from_millis(8));
+        let entry_start_visual = entry_start.current().expect("activity entry visual");
+        assert!(entry_start.is_active());
+        assert!(entry_start_visual.opacity <= 0.001);
+        assert!(entry_start_visual.y_offset_pixels > 0.0);
+        assert!(entry_start_visual.scale < 1.0);
+
+        let entry_mid = registry.frame_for_visible(
+            true,
+            now + Duration::from_millis(8) + STREAMING_ACTIVITY_CUE_ENTRY_DURATION / 2,
+        );
+        let entry_mid_visual = entry_mid.current().expect("activity entry visual");
+        assert!(entry_mid.is_active());
+        assert!(entry_mid_visual.opacity > 0.0);
+        assert!(entry_mid_visual.opacity < 1.0);
+
+        let settled = registry.frame_for_visible(
+            true,
+            now + Duration::from_millis(8) + STREAMING_ACTIVITY_CUE_ENTRY_DURATION * 2,
+        );
+        assert!(!settled.is_active());
+        assert_eq!(
+            settled.current(),
+            Some(StreamingActivityCueVisual::settled())
+        );
+
+        let exit_start = registry.frame_for_visible(
+            false,
+            now + Duration::from_millis(8) + STREAMING_ACTIVITY_CUE_ENTRY_DURATION * 3,
+        );
+        let exit_start_visual = exit_start.exiting().expect("activity exit visual");
+        assert!(exit_start.is_active());
+        assert_eq!(exit_start.current(), None);
+        assert!(exit_start_visual.opacity > 0.99);
+
+        let exit_mid = registry.frame_for_visible(
+            false,
+            now + Duration::from_millis(8)
+                + STREAMING_ACTIVITY_CUE_ENTRY_DURATION * 3
+                + STREAMING_ACTIVITY_CUE_EXIT_DURATION / 2,
+        );
+        let exit_mid_visual = exit_mid.exiting().expect("activity exit visual");
+        assert!(exit_mid.is_active());
+        assert!(exit_mid_visual.opacity > 0.0);
+        assert!(exit_mid_visual.opacity < 1.0);
+        assert!(exit_mid_visual.y_offset_pixels < 0.0);
+
+        let exit_done = registry.frame_for_visible(
+            false,
+            now + Duration::from_millis(8)
+                + STREAMING_ACTIVITY_CUE_ENTRY_DURATION * 3
+                + STREAMING_ACTIVITY_CUE_EXIT_DURATION * 2,
+        );
+        assert!(!exit_done.is_active());
+        assert!(exit_done.exiting().is_none());
+    }
+
+    #[test]
+    fn reduced_motion_snaps_streaming_activity_cue_motion() {
+        let _guard = crate::animation::DesktopReducedMotionEnvGuard::set(true);
+        let mut registry = StreamingActivityCueMotionRegistry::default();
+        let now = Instant::now();
+
+        assert!(!registry.frame_for_visible(false, now).is_active());
+        let visible = registry.frame_for_visible(true, now + Duration::from_millis(1));
+        assert!(!visible.is_active());
+        assert_eq!(
+            visible.current(),
+            Some(StreamingActivityCueVisual::settled())
+        );
+
+        let hidden = registry.frame_for_visible(false, now + Duration::from_millis(2));
+        assert!(!hidden.is_active());
+        assert!(hidden.current().is_none());
+        assert!(hidden.exiting().is_none());
     }
 
     #[test]

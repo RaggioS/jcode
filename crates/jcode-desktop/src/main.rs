@@ -8329,6 +8329,7 @@ fn single_session_streaming_primitive_geometry_cache_key(
     transcript_message_motion_cache_key: u64,
     transcript_motion_cache_key: u64,
     inline_markdown_motion_cache_key: u64,
+    activity_cue_motion_cache_key: u64,
     scrollbar_motion_cache_key: u64,
     body_key: Option<u64>,
     body_line_count: usize,
@@ -8364,6 +8365,7 @@ fn single_session_streaming_primitive_geometry_cache_key(
     transcript_message_motion_cache_key.hash(&mut hasher);
     transcript_motion_cache_key.hash(&mut hasher);
     inline_markdown_motion_cache_key.hash(&mut hasher);
+    activity_cue_motion_cache_key.hash(&mut hasher);
     scrollbar_motion_cache_key.hash(&mut hasher);
     spinner_tick.hash(&mut hasher);
     app.is_processing.hash(&mut hasher);
@@ -8532,6 +8534,7 @@ struct Canvas {
     stdin_overlay_motion: StdinOverlayMotionRegistry,
     transcript_card_motion: TranscriptCardMotionRegistry,
     inline_markdown_pill_motion: InlineMarkdownPillMotionRegistry,
+    streaming_activity_cue_motion: StreamingActivityCueMotionRegistry,
     tool_card_motion: ToolCardMotionRegistry,
     single_session_scrollbar_motion: SingleSessionScrollbarMotionRegistry,
     primitive_vertex_buffer: Option<wgpu::Buffer>,
@@ -8664,6 +8667,7 @@ impl Canvas {
             stdin_overlay_motion: StdinOverlayMotionRegistry::default(),
             transcript_card_motion: TranscriptCardMotionRegistry::default(),
             inline_markdown_pill_motion: InlineMarkdownPillMotionRegistry::default(),
+            streaming_activity_cue_motion: StreamingActivityCueMotionRegistry::default(),
             tool_card_motion: ToolCardMotionRegistry::default(),
             single_session_scrollbar_motion: SingleSessionScrollbarMotionRegistry::default(),
             primitive_vertex_buffer: None,
@@ -8744,6 +8748,7 @@ impl Canvas {
         self.single_session_scroll_motion.clear();
         self.transcript_message_motion.clear();
         self.inline_widget_preview_pane_motion.clear();
+        self.streaming_activity_cue_motion.clear();
         self.single_session_streaming_handoff_started_at = None;
         self.first_render_completed = false;
         self.text_needs_prepare = true;
@@ -9873,6 +9878,9 @@ impl Canvas {
                     transcript_line_height,
                     now,
                 );
+                let activity_cue_motion = self
+                    .streaming_activity_cue_motion
+                    .frame(single_session, now);
                 let tool_motion = self
                     .tool_card_motion
                     .frame(tool_motion_lines, now, spinner_tick);
@@ -9895,6 +9903,7 @@ impl Canvas {
                     || transcript_message_motion.is_active()
                     || transcript_motion.is_active()
                     || inline_markdown_motion.is_active()
+                    || activity_cue_motion.is_active()
                     || tool_motion.is_active()
                     || scrollbar_motion.is_active()
                     || scroll_motion_frame.active
@@ -9916,6 +9925,7 @@ impl Canvas {
                     transcript_message_motion.cache_key(),
                     transcript_motion.cache_key(),
                     inline_markdown_motion.cache_key(),
+                    activity_cue_motion.cache_key(),
                     scrollbar_motion.cache_key(),
                     single_session_rendered_body_key,
                     self.single_session_body_lines.len(),
@@ -9943,6 +9953,7 @@ impl Canvas {
                                 Some(&transcript_message_motion),
                                 Some(&transcript_motion),
                                 Some(&inline_markdown_motion),
+                                Some(&activity_cue_motion),
                                 &tool_motion,
                                 Some(&scrollbar_motion),
                             );
@@ -9970,6 +9981,7 @@ impl Canvas {
                             Some(&transcript_message_motion),
                             Some(&transcript_motion),
                             Some(&inline_markdown_motion),
+                            Some(&activity_cue_motion),
                             &tool_motion,
                             Some(&scrollbar_motion),
                         ),
@@ -9988,6 +10000,7 @@ impl Canvas {
                 self.transcript_message_motion.clear();
                 self.transcript_card_motion.clear();
                 self.inline_markdown_pill_motion.clear();
+                self.streaming_activity_cue_motion.clear();
                 self.single_session_scrollbar_motion.clear();
                 self.primitive_vertices_cache_key = None;
                 let render_layout = workspace_render_layout_for_frame
