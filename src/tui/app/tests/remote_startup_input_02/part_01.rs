@@ -855,7 +855,7 @@ fn test_ctrl_a_keeps_home_behavior_when_input_present() {
 }
 
 #[test]
-fn test_ctrl_up_edits_queued_message() {
+fn test_retrieve_pending_message_edits_queued_message() {
     let mut app = create_test_app();
     app.queue_mode = true;
     app.is_processing = true;
@@ -877,8 +877,9 @@ fn test_ctrl_up_edits_queued_message() {
     assert_eq!(app.queued_count(), 1);
     assert!(app.input().is_empty());
 
-    // Press Ctrl+Up to bring it back for editing
-    app.handle_key(KeyCode::Up, KeyModifiers::CONTROL).unwrap();
+    // Pending messages can still be retrieved for editing through the helper;
+    // Ctrl+Up is now reserved for explicit prompt-history navigation.
+    app.retrieve_pending_message_for_edit();
 
     assert_eq!(app.queued_count(), 0);
     assert_eq!(app.input(), "hello");
@@ -886,7 +887,7 @@ fn test_ctrl_up_edits_queued_message() {
 }
 
 #[test]
-fn test_ctrl_up_prefers_pending_interleave_for_editing() {
+fn test_retrieve_pending_message_prefers_pending_interleave_for_editing() {
     let mut app = create_test_app();
     app.is_processing = true;
     app.queue_mode = false; // Enter=interleave, Ctrl+Enter=queue
@@ -908,7 +909,7 @@ fn test_ctrl_up_prefers_pending_interleave_for_editing() {
     assert_eq!(app.interleave_message.as_deref(), Some("urgent"));
     assert_eq!(app.queued_count(), 1);
 
-    app.handle_key(KeyCode::Up, KeyModifiers::CONTROL).unwrap();
+    app.retrieve_pending_message_for_edit();
 
     assert_eq!(app.input(), "urgent\n\nlater");
     assert_eq!(app.interleave_message.as_deref(), None);

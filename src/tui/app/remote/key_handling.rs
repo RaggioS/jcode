@@ -434,6 +434,11 @@ async fn handle_remote_key_internal(
         return Ok(());
     }
 
+    if modifiers == KeyModifiers::CONTROL && matches!(code, KeyCode::Up | KeyCode::Down) {
+        input::handle_prompt_history_navigation(app, code, modifiers);
+        return Ok(());
+    }
+
     if modifiers.contains(KeyModifiers::CONTROL) {
         if app.handle_diagram_ctrl_key(code, diagram_available) {
             return Ok(());
@@ -633,7 +638,9 @@ async fn handle_remote_key_internal(
         return Ok(());
     }
 
-    if input::handle_prompt_history_navigation(app, code, modifiers) {
+    if input::handle_multiline_input_navigation(app, code, modifiers)
+        || input::handle_prompt_history_navigation(app, code, modifiers)
+    {
         return Ok(());
     }
 
