@@ -136,6 +136,45 @@ fn mac_hotkey_launch_agent_path() -> Result<PathBuf> {
         .join("com.jcode.hotkey.plist"))
 }
 
+#[cfg(any(test, target_os = "macos"))]
+fn mac_hotkey_launch_agent_plist(
+    exe: &str,
+    stdout_path: &str,
+    stderr_path: &str,
+    terminal: &str,
+) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.jcode.hotkey</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{exe}</string>
+        <string>setup-hotkey</string>
+        <string>--listen-macos-hotkey</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>{stdout_path}</string>
+    <key>StandardErrorPath</key>
+    <string>{stderr_path}</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>JCODE_PREFERRED_TERMINAL</key>
+        <string>{terminal}</string>
+    </dict>
+</dict>
+</plist>
+"#,
+    )
+}
+
 #[cfg(target_os = "macos")]
 fn install_macos_hotkey_listener(
     preferred_terminal: Option<MacTerminalKind>,
@@ -164,39 +203,13 @@ fn install_macos_hotkey_listener(
         std::fs::create_dir_all(parent)?;
     }
 
-    let plist = format!(
-        r#"<?xml version=\"1.0\" encoding=\"UTF-8\"?>
-<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">
-<plist version=\"1.0\">
-<dict>
-    <key>Label</key>
-    <string>com.jcode.hotkey</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>{exe}</string>
-        <string>setup-hotkey</string>
-        <string>--listen-macos-hotkey</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-    <key>StandardOutPath</key>
-    <string>{stdout_path}</string>
-    <key>StandardErrorPath</key>
-    <string>{stderr_path}</string>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>JCODE_PREFERRED_TERMINAL</key>
-        <string>{terminal}</string>
-    </dict>
-</dict>
-</plist>
-"#,
-        exe = exe_path,
-        stdout_path = hotkey_dir.join("mac_hotkey.out.log").display(),
-        stderr_path = hotkey_dir.join("mac_hotkey.err.log").display(),
-        terminal = terminal.cli_value(),
+    let stdout_path = hotkey_dir.join("mac_hotkey.out.log");
+    let stderr_path = hotkey_dir.join("mac_hotkey.err.log");
+    let plist = mac_hotkey_launch_agent_plist(
+        &exe_path,
+        &stdout_path.to_string_lossy(),
+        &stderr_path.to_string_lossy(),
+        terminal.cli_value(),
     );
     std::fs::write(&plist_path, plist)?;
 
