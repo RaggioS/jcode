@@ -4,6 +4,7 @@ pub mod activation;
 pub mod anthropic;
 pub mod antigravity;
 pub mod bedrock;
+mod catalog_routes;
 pub mod claude;
 pub mod copilot;
 pub mod cursor;
@@ -37,14 +38,21 @@ use async_trait::async_trait;
 use jcode_provider_core::FailoverDecision;
 use std::sync::{Arc, RwLock};
 
+pub use catalog_routes::{
+    append_simplified_anthropic_model_routes, remote_current_openai_compatible_route_for_model,
+    remote_model_is_server_copilot_only, remote_model_routes_fallback,
+    remote_model_routes_lightweight_fallback, remote_model_should_offer_copilot_route,
+    remote_openai_compatible_route_for_model, simplified_model_routes_for_picker,
+};
 pub use jcode_provider_core::{
     ALL_CLAUDE_MODELS, ALL_OPENAI_MODELS, CHEAPNESS_REFERENCE_INPUT_TOKENS,
     CHEAPNESS_REFERENCE_OUTPUT_TOKENS, DEFAULT_CONTEXT_LIMIT, EventStream, JCODE_USER_AGENT,
-    ModelCapabilities, ModelCatalogRefreshSummary, ModelRoute, NativeCompactionResult,
-    NativeToolResult, NativeToolResultSender, PremiumMode, Provider, RouteBillingKind,
-    RouteCheapnessEstimate, RouteCostConfidence, RouteCostSource, dedupe_model_routes,
-    explicit_model_provider_prefix, model_name_for_provider, normalize_copilot_model_name,
-    provider_from_model_key, shared_http_client, summarize_model_catalog_refresh,
+    ModelCapabilities, ModelCatalogRefreshSummary, ModelRoute, ModelRouteApiMethod,
+    NativeCompactionResult, NativeToolResult, NativeToolResultSender, PremiumMode, Provider,
+    RouteBillingKind, RouteCheapnessEstimate, RouteCostConfidence, RouteCostSource,
+    dedupe_model_routes, explicit_model_provider_prefix, model_name_for_provider,
+    normalize_copilot_model_name, provider_from_model_key, shared_http_client,
+    summarize_model_catalog_refresh,
 };
 pub(crate) use jcode_provider_core::{ProviderFailoverPrompt, parse_failover_prompt_message};
 pub use route_builders::{

@@ -617,7 +617,7 @@ fn test_tui_cerebras_paste_key_lifecycle_has_no_degraded_success_messages() {
         "{prompt}"
     );
     assert!(
-        prompt.contains("Suggested default model: `qwen-3-235b-a22b-instruct-2507`"),
+        prompt.contains("Suggested default model: `gpt-oss-120b`"),
         "{prompt}"
     );
     assert!(prompt.contains("**Paste your API key below**"), "{prompt}");

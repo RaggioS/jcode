@@ -104,20 +104,21 @@ impl MultiProvider {
         api_method: &'a str,
         provider_display: &str,
     ) -> Option<&'a str> {
-        if let Some(("openai-compatible", profile_id)) = api_method.split_once(':') {
-            let profile_id = profile_id.trim();
-            if !profile_id.is_empty() {
-                return Some(profile_id);
+        let parsed = ModelRouteApiMethod::parse(api_method);
+        match parsed {
+            ModelRouteApiMethod::OpenAiCompatible {
+                profile_id: Some(_),
+            } => api_method
+                .split_once(':')
+                .map(|(_, profile_id)| profile_id.trim())
+                .filter(|profile_id| !profile_id.is_empty()),
+            ModelRouteApiMethod::OpenAiCompatible { profile_id: None } => {
+                crate::provider_catalog::openai_compatible_profile_id_for_display_name(
+                    provider_display,
+                )
             }
+            _ => None,
         }
-
-        if api_method == "openai-compatible" {
-            return crate::provider_catalog::openai_compatible_profile_id_for_display_name(
-                provider_display,
-            );
-        }
-
-        None
     }
 
     pub fn default_model_selection_from_route(
@@ -125,48 +126,58 @@ impl MultiProvider {
         api_method: &str,
         provider_display: &str,
     ) -> DefaultModelSelection {
-        let profile_id =
-            Self::openai_compatible_profile_id_from_route(api_method, provider_display);
-        let model_spec = if api_method == "copilot" {
-            format!("copilot:{}", bare_name)
-        } else if api_method == "claude-oauth" {
-            format!("claude-oauth:{}", bare_name)
-        } else if api_method == "api-key" && provider_display == "Anthropic" {
-            format!("claude-api:{}", bare_name)
-        } else if api_method == "cursor" {
-            format!("cursor:{}", bare_name)
-        } else if api_method == "bedrock" {
-            format!("bedrock:{}", bare_name)
-        } else if api_method == "openai-api-key" {
-            format!("openai-api:{}", bare_name)
-        } else if api_method == "openai-oauth" {
-            format!("openai-oauth:{}", bare_name)
-        } else if provider_display == "Antigravity" {
-            format!("antigravity:{}", bare_name)
-        } else if profile_id.is_some() {
-            bare_name.to_string()
-        } else if api_method == "openrouter" && provider_display != "auto" {
-            let model_id = crate::provider::openrouter_catalog_model_id(bare_name)
-                .unwrap_or_else(|| bare_name.to_string());
-            format!("{}@{}", model_id, provider_display)
-        } else {
-            bare_name.to_string()
+        let api_method_kind = ModelRouteApiMethod::parse(api_method);
+        let profile_id = match &api_method_kind {
+            ModelRouteApiMethod::OpenAiCompatible {
+                profile_id: Some(profile_id),
+            } => Some(profile_id.clone()),
+            ModelRouteApiMethod::OpenAiCompatible { profile_id: None } => {
+                crate::provider_catalog::openai_compatible_profile_id_for_display_name(
+                    provider_display,
+                )
+                .map(ToOwned::to_owned)
+            }
+            _ => None,
+        };
+        let model_spec = match &api_method_kind {
+            ModelRouteApiMethod::Copilot => format!("copilot:{}", bare_name),
+            ModelRouteApiMethod::ClaudeOAuth => format!("claude-oauth:{}", bare_name),
+            ModelRouteApiMethod::AnthropicApiKey if provider_display == "Anthropic" => {
+                format!("claude-api:{}", bare_name)
+            }
+            ModelRouteApiMethod::Cursor => format!("cursor:{}", bare_name),
+            ModelRouteApiMethod::Bedrock => format!("bedrock:{}", bare_name),
+            ModelRouteApiMethod::OpenAIApiKey => format!("openai-api:{}", bare_name),
+            ModelRouteApiMethod::OpenAIOAuth => format!("openai-oauth:{}", bare_name),
+            _ if provider_display == "Antigravity" => format!("antigravity:{}", bare_name),
+            ModelRouteApiMethod::OpenAiCompatible { .. } => bare_name.to_string(),
+            ModelRouteApiMethod::OpenRouter if provider_display != "auto" => {
+                let model_id = crate::provider::openrouter_catalog_model_id(bare_name)
+                    .unwrap_or_else(|| bare_name.to_string());
+                format!("{}@{}", model_id, provider_display)
+            }
+            _ => bare_name.to_string(),
         };
 
-        let provider_key = match api_method {
-            "claude-oauth" | "api-key"
-                if crate::provider::provider_for_model(bare_name) == Some("claude") =>
+        let provider_key = match &api_method_kind {
+            method
+                if method.is_anthropic_credential_route()
+                    && crate::provider::provider_for_model(bare_name) == Some("claude") =>
             {
                 Some("claude".to_string())
             }
-            "openai-oauth" | "openai-api-key" => Some("openai".to_string()),
-            "copilot" => Some("copilot".to_string()),
-            "cursor" => Some("cursor".to_string()),
-            "bedrock" => Some("bedrock".to_string()),
-            "cli" if provider_display == "Antigravity" => Some("antigravity".to_string()),
-            "openrouter" => Some("openrouter".to_string()),
-            method if method.starts_with("openai-compatible") => profile_id.map(ToOwned::to_owned),
-            _ => profile_id.map(ToOwned::to_owned),
+            method if method.is_openai_credential_route() => Some("openai".to_string()),
+            ModelRouteApiMethod::Copilot => Some("copilot".to_string()),
+            ModelRouteApiMethod::Cursor => Some("cursor".to_string()),
+            ModelRouteApiMethod::Bedrock => Some("bedrock".to_string()),
+            ModelRouteApiMethod::Other(method)
+                if method == "cli" && provider_display == "Antigravity" =>
+            {
+                Some("antigravity".to_string())
+            }
+            ModelRouteApiMethod::OpenRouter => Some("openrouter".to_string()),
+            ModelRouteApiMethod::OpenAiCompatible { .. } => profile_id.clone(),
+            _ => profile_id.clone(),
         };
 
         DefaultModelSelection {

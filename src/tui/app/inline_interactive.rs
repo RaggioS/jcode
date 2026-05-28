@@ -97,18 +97,26 @@ fn model_picker_recommendation_rank(name: &str) -> usize {
 }
 
 fn model_picker_route_can_be_recommended(model: &str, route: &PickerOption) -> bool {
+    let api_method = crate::provider::ModelRouteApiMethod::parse(&route.api_method);
     match model {
         "gpt-5.5" => {
-            route.api_method == "openai-oauth"
-                && model_picker_provider_labels_match(&route.provider, "openai")
+            matches!(
+                &api_method,
+                crate::provider::ModelRouteApiMethod::OpenAIOAuth
+            ) && model_picker_provider_labels_match(&route.provider, "openai")
         }
         "claude-opus-4-7" => {
-            route.api_method == "claude-oauth"
-                && model_picker_provider_labels_match(&route.provider, "anthropic")
+            matches!(
+                &api_method,
+                crate::provider::ModelRouteApiMethod::ClaudeOAuth
+            ) && model_picker_provider_labels_match(&route.provider, "anthropic")
         }
         "deepseek/deepseek-v4-pro" => {
-            (route.api_method == "openrouter" && route.provider == "auto")
-                || (route.api_method.starts_with("openai-compatible")
+            (matches!(
+                &api_method,
+                crate::provider::ModelRouteApiMethod::OpenRouter
+            ) && route.provider == "auto")
+                || (api_method.is_openai_compatible()
                     && model_picker_provider_labels_match(&route.provider, "deepseek"))
         }
         _ => false,
@@ -224,43 +232,6 @@ fn model_picker_route_is_default(
     // Legacy configs may only contain a bare model. In that case the persisted
     // data cannot identify the route, so keep the previous model-only marker.
     default_model == model_name
-}
-
-fn append_simplified_anthropic_model_routes(
-    routes: &mut Vec<crate::provider::ModelRoute>,
-    model: String,
-    auth: &crate::auth::AuthStatus,
-) {
-    if auth.anthropic.has_oauth {
-        routes.push(crate::provider::ModelRoute {
-            model: model.clone(),
-            provider: "Anthropic".to_string(),
-            api_method: "claude-oauth".to_string(),
-            available: true,
-            detail: String::new(),
-            cheapness: None,
-        });
-    }
-    if auth.anthropic.has_api_key {
-        routes.push(crate::provider::ModelRoute {
-            model: model.clone(),
-            provider: "Anthropic".to_string(),
-            api_method: "api-key".to_string(),
-            available: true,
-            detail: String::new(),
-            cheapness: None,
-        });
-    }
-    if !auth.anthropic.has_oauth && !auth.anthropic.has_api_key {
-        routes.push(crate::provider::ModelRoute {
-            model,
-            provider: "Anthropic".to_string(),
-            api_method: "claude-oauth".to_string(),
-            available: false,
-            detail: "no credentials".to_string(),
-            cheapness: None,
-        });
-    }
 }
 
 impl App {
@@ -429,121 +400,11 @@ impl App {
         &self,
         current_model: &str,
     ) -> Vec<crate::provider::ModelRoute> {
-        let auth = crate::auth::AuthStatus::check_fast();
-        let mut routes = Vec::new();
-
-        for model in self.provider.available_models_display() {
-            if !model.contains('/') && crate::provider::provider_for_model(&model) == Some("openai")
-            {
-                if auth.openai_has_oauth {
-                    routes.push(crate::provider::ModelRoute {
-                        model: model.clone(),
-                        provider: "OpenAI".to_string(),
-                        api_method: "openai-oauth".to_string(),
-                        available: true,
-                        detail: String::new(),
-                        cheapness: None,
-                    });
-                }
-                if auth.openai_has_api_key {
-                    routes.push(crate::provider::ModelRoute {
-                        model: model.clone(),
-                        provider: "OpenAI".to_string(),
-                        api_method: "openai-api-key".to_string(),
-                        available: true,
-                        detail: String::new(),
-                        cheapness: None,
-                    });
-                }
-                if auth.openai == crate::auth::AuthState::NotConfigured {
-                    routes.push(crate::provider::ModelRoute {
-                        model,
-                        provider: "OpenAI".to_string(),
-                        api_method: "openai-oauth".to_string(),
-                        available: false,
-                        detail: "no credentials".to_string(),
-                        cheapness: None,
-                    });
-                }
-                continue;
-            }
-
-            let (provider, api_method, available, detail) =
-                if crate::provider::bedrock::BedrockProvider::is_bedrock_model_id(&model) {
-                    (
-                        "AWS Bedrock".to_string(),
-                        "bedrock".to_string(),
-                        auth.bedrock != crate::auth::AuthState::NotConfigured,
-                        if auth.bedrock == crate::auth::AuthState::NotConfigured {
-                            "no Bedrock credentials or region; run /login bedrock".to_string()
-                        } else {
-                            String::new()
-                        },
-                    )
-                } else if model.contains('/') {
-                    (
-                        "auto".to_string(),
-                        "openrouter".to_string(),
-                        auth.openrouter != crate::auth::AuthState::NotConfigured,
-                        "simplified catalog".to_string(),
-                    )
-                } else {
-                    match crate::provider::provider_for_model(&model) {
-                        Some("claude") => {
-                            append_simplified_anthropic_model_routes(&mut routes, model, &auth);
-                            continue;
-                        }
-                        Some("openai") => unreachable!("OpenAI models are handled above"),
-                        Some("gemini") => (
-                            "Gemini".to_string(),
-                            "code-assist-oauth".to_string(),
-                            auth.gemini != crate::auth::AuthState::NotConfigured,
-                            String::new(),
-                        ),
-                        Some("cursor") => (
-                            "Cursor".to_string(),
-                            "cursor".to_string(),
-                            auth.cursor != crate::auth::AuthState::NotConfigured,
-                            String::new(),
-                        ),
-                        Some("openrouter") => (
-                            "auto".to_string(),
-                            "openrouter".to_string(),
-                            auth.openrouter != crate::auth::AuthState::NotConfigured,
-                            "simplified catalog".to_string(),
-                        ),
-                        Some(other) => (other.to_string(), other.to_string(), true, String::new()),
-                        None => (
-                            self.provider.name().to_string(),
-                            "current".to_string(),
-                            true,
-                            String::new(),
-                        ),
-                    }
-                };
-
-            routes.push(crate::provider::ModelRoute {
-                model,
-                provider,
-                api_method,
-                available,
-                detail,
-                cheapness: None,
-            });
-        }
-
-        if routes.is_empty() && !current_model.is_empty() && current_model != "unknown" {
-            routes.push(crate::provider::ModelRoute {
-                model: current_model.to_string(),
-                provider: self.provider.name().to_string(),
-                api_method: "current".to_string(),
-                available: true,
-                detail: "simplified catalog".to_string(),
-                cheapness: None,
-            });
-        }
-
-        routes
+        crate::provider::simplified_model_routes_for_picker(
+            self.provider.name(),
+            current_model,
+            self.provider.available_models_display(),
+        )
     }
 
     pub(super) fn open_model_picker(&mut self) {
@@ -889,13 +750,15 @@ impl App {
 
         fn route_sort_key(r: &PickerOption) -> (u8, u8, u64, String) {
             let avail = if r.available { 0 } else { 1 };
-            let method = match r.api_method.as_str() {
-                "claude-oauth" | "openai-oauth" | "openai-api-key" => 0,
-                "api-key" => 1,
-                method if method.starts_with("openai-compatible") => 1,
-                "cursor" => 2,
-                "copilot" => 3,
-                "openrouter" => 4,
+            let method = match crate::provider::ModelRouteApiMethod::parse(&r.api_method) {
+                crate::provider::ModelRouteApiMethod::ClaudeOAuth
+                | crate::provider::ModelRouteApiMethod::OpenAIOAuth
+                | crate::provider::ModelRouteApiMethod::OpenAIApiKey => 0,
+                crate::provider::ModelRouteApiMethod::AnthropicApiKey
+                | crate::provider::ModelRouteApiMethod::OpenAiCompatible { .. } => 1,
+                crate::provider::ModelRouteApiMethod::Cursor => 2,
+                crate::provider::ModelRouteApiMethod::Copilot => 3,
+                crate::provider::ModelRouteApiMethod::OpenRouter => 4,
                 _ => 5,
             };
             let cheapness = r.estimated_reference_cost_micros.unwrap_or(u64::MAX);
@@ -1352,352 +1215,21 @@ impl App {
     }
 
     pub(super) fn build_remote_model_routes_fallback(&self) -> Vec<crate::provider::ModelRoute> {
-        let auth = crate::auth::AuthStatus::check_fast();
-        let mut routes = Vec::new();
-        for model in &self.remote_available_entries {
-            if !crate::provider::is_listable_model_name(model) {
-                continue;
-            }
-
-            let openrouter_catalog_model = crate::provider::openrouter_catalog_model_id(model);
-            let openrouter_cached = openrouter_catalog_model
-                .as_deref()
-                .and_then(crate::provider::openrouter::load_endpoints_disk_cache_public);
-
-            if crate::provider::bedrock::BedrockProvider::is_bedrock_model_id(model) {
-                let available = auth.bedrock != crate::auth::AuthState::NotConfigured
-                    || crate::provider::bedrock::BedrockProvider::has_credentials();
-                routes.push(crate::provider::ModelRoute {
-                    model: model.clone(),
-                    provider: "AWS Bedrock".to_string(),
-                    api_method: "bedrock".to_string(),
-                    available,
-                    detail: if available {
-                        String::new()
-                    } else {
-                        "no Bedrock credentials or region; run /login bedrock".to_string()
-                    },
-                    cheapness: None,
-                });
-                continue;
-            }
-
-            if model.contains('/') {
-                let cached = openrouter_cached;
-                let auto_detail = cached
-                    .as_ref()
-                    .and_then(|(eps, _)| eps.first().map(|ep| format!("→ {}", ep.provider_name)))
-                    .unwrap_or_default();
-                routes.push(crate::provider::build_openrouter_auto_route(
-                    model,
-                    auth.openrouter != crate::auth::AuthState::NotConfigured,
-                    auto_detail,
-                ));
-                if let Some((endpoints, age)) = cached {
-                    let age_str = if age < 3600 {
-                        format!("{}m ago", age / 60)
-                    } else if age < 86400 {
-                        format!("{}h ago", age / 3600)
-                    } else {
-                        format!("{}d ago", age / 86400)
-                    };
-                    for ep in &endpoints {
-                        routes.push(crate::provider::build_openrouter_endpoint_route(
-                            model,
-                            ep,
-                            auth.openrouter != crate::auth::AuthState::NotConfigured,
-                            Some(&age_str),
-                        ));
-                    }
-                }
-                continue;
-            }
-
-            let mut added_any = false;
-
-            if crate::provider::provider_for_model(model) == Some("claude")
-                && auth.anthropic.has_oauth
-            {
-                let (available, detail) =
-                    crate::provider::anthropic_oauth_route_availability(model);
-                routes.push(crate::provider::build_anthropic_oauth_route(
-                    model, available, detail,
-                ));
-                added_any = true;
-            }
-
-            if crate::provider::ALL_OPENAI_MODELS.contains(&model.as_str()) {
-                let availability = crate::provider::model_availability_for_account(model);
-                let (available, detail) = if auth.openai == crate::auth::AuthState::NotConfigured {
-                    (false, "no credentials".to_string())
-                } else {
-                    match availability.state {
-                        crate::provider::AccountModelAvailabilityState::Available => {
-                            (true, String::new())
-                        }
-                        crate::provider::AccountModelAvailabilityState::Unavailable => (
-                            false,
-                            crate::provider::format_account_model_availability_detail(
-                                &availability,
-                            )
-                            .unwrap_or_else(|| "not available".to_string()),
-                        ),
-                        crate::provider::AccountModelAvailabilityState::Unknown => (
-                            true,
-                            crate::provider::format_account_model_availability_detail(
-                                &availability,
-                            )
-                            .unwrap_or_else(|| "availability unknown".to_string()),
-                        ),
-                    }
-                };
-                routes.push(crate::provider::build_openai_oauth_route(
-                    model, available, detail,
-                ));
-                added_any = true;
-            }
-
-            if auth.openrouter != crate::auth::AuthState::NotConfigured {
-                match (
-                    crate::provider::provider_for_model(model),
-                    openrouter_cached.as_ref(),
-                ) {
-                    (_, Some((endpoints, _age))) => {
-                        for ep in endpoints {
-                            routes.push(crate::provider::build_openrouter_endpoint_route(
-                                model, ep, true, None,
-                            ));
-                        }
-                        added_any = true;
-                    }
-                    (Some("claude"), None) => {
-                        routes.push(crate::provider::build_openrouter_fallback_provider_route(
-                            model,
-                            openrouter_catalog_model.as_deref().unwrap_or(model),
-                            "Anthropic",
-                        ));
-                        added_any = true;
-                    }
-                    (Some("openai"), None) => {
-                        routes.push(crate::provider::build_openrouter_fallback_provider_route(
-                            model,
-                            openrouter_catalog_model.as_deref().unwrap_or(model),
-                            "OpenAI",
-                        ));
-                        added_any = true;
-                    }
-                    _ => {}
-                }
-            }
-
-            if let Some(route) = Self::remote_openai_compatible_route_for_model(model) {
-                routes.push(route);
-                added_any = true;
-            }
-
-            if !added_any
-                && let Some(route) = self.remote_current_openai_compatible_route_for_model(model)
-            {
-                routes.push(route);
-                added_any = true;
-            }
-
-            if !added_any
-                && Self::remote_model_should_offer_copilot_route(model)
-                && !model.contains("[1m]")
-            {
-                routes.push(crate::provider::build_copilot_route(
-                    model,
-                    auth.copilot == crate::auth::AuthState::Available
-                        || Self::remote_model_is_server_copilot_only(model),
-                    String::new(),
-                ));
-                added_any = true;
-            }
-
-            if crate::provider::gemini::is_gemini_model_id(model) {
-                routes.push(crate::provider::ModelRoute {
-                    model: model.clone(),
-                    provider: "Gemini".to_string(),
-                    api_method: "code-assist-oauth".to_string(),
-                    available: auth.gemini == crate::auth::AuthState::Available,
-                    detail: String::new(),
-                    cheapness: None,
-                });
-                added_any = true;
-            }
-
-            if !added_any {
-                routes.push(crate::provider::ModelRoute {
-                    model: model.clone(),
-                    provider: "unknown".to_string(),
-                    api_method: "unknown".to_string(),
-                    available: false,
-                    detail: "no matching configured provider route".to_string(),
-                    cheapness: None,
-                });
-            }
-        }
-        routes
+        crate::provider::remote_model_routes_fallback(
+            self.remote_provider_name.as_deref(),
+            &self.remote_available_entries,
+        )
     }
 
     fn build_remote_model_routes_lightweight_fallback(
         &self,
         current_model: &str,
     ) -> Vec<crate::provider::ModelRoute> {
-        let mut routes = Vec::new();
-        for model in &self.remote_available_entries {
-            if !crate::provider::is_listable_model_name(model) {
-                continue;
-            }
-            routes.push(crate::provider::ModelRoute {
-                model: model.clone(),
-                provider: self
-                    .remote_provider_name
-                    .clone()
-                    .unwrap_or_else(|| "remote".to_string()),
-                api_method: "remote-catalog".to_string(),
-                available: true,
-                detail: "refreshing route details…".to_string(),
-                cheapness: None,
-            });
-        }
-
-        if routes.is_empty() && !current_model.is_empty() && current_model != "unknown" {
-            routes.push(crate::provider::ModelRoute {
-                model: current_model.to_string(),
-                provider: self
-                    .remote_provider_name
-                    .clone()
-                    .unwrap_or_else(|| "remote".to_string()),
-                api_method: "current".to_string(),
-                available: true,
-                detail: "refreshing model catalog…".to_string(),
-                cheapness: None,
-            });
-        }
-
-        routes
-    }
-
-    fn remote_current_openai_compatible_route_for_model(
-        &self,
-        model: &str,
-    ) -> Option<crate::provider::ModelRoute> {
-        if model.trim().is_empty()
-            || model.contains('/')
-            || crate::provider::provider_for_model(model).is_some()
-        {
-            return None;
-        }
-
-        let provider_name = self.remote_provider_name.as_deref()?.trim();
-        let profile_id =
-            crate::provider_catalog::openai_compatible_profile_id_for_display_name(provider_name)?;
-        let profile = crate::provider_catalog::openai_compatible_profile_by_id(profile_id)?;
-        if !crate::provider_catalog::openai_compatible_profile_is_configured(profile) {
-            return None;
-        }
-        let resolved = crate::provider_catalog::resolve_openai_compatible_profile(profile);
-
-        Some(crate::provider::ModelRoute {
-            model: model.to_string(),
-            provider: resolved.display_name,
-            api_method: format!("openai-compatible:{}", resolved.id),
-            available: true,
-            detail: resolved.api_base,
-            cheapness: None,
-        })
-    }
-
-    pub(super) fn remote_model_should_offer_copilot_route(model: &str) -> bool {
-        Self::remote_openai_compatible_route_for_model(model).is_none()
-            && (Self::remote_model_is_server_copilot_only(model)
-                || crate::provider::copilot::is_known_display_model(model))
-    }
-
-    pub(super) fn remote_openai_compatible_route_for_model(
-        model: &str,
-    ) -> Option<crate::provider::ModelRoute> {
-        for profile in crate::provider_catalog::openai_compatible_profiles()
-            .iter()
-            .copied()
-        {
-            if !crate::provider_catalog::openai_compatible_profile_is_configured(profile) {
-                continue;
-            }
-            let resolved = crate::provider_catalog::resolve_openai_compatible_profile(profile);
-            let Some(from_live_catalog) =
-                Self::remote_openai_compatible_profile_models(&resolved, profile)
-                    .iter()
-                    .find_map(|candidate| (candidate.0 == model).then_some(candidate.1))
-            else {
-                continue;
-            };
-            let detail = if from_live_catalog {
-                resolved.api_base.clone()
-            } else if resolved.api_base.trim().is_empty() {
-                "fallback: static provider model list".to_string()
-            } else {
-                format!(
-                    "{}; fallback: static provider model list",
-                    resolved.api_base
-                )
-            };
-            return Some(crate::provider::ModelRoute {
-                model: model.to_string(),
-                provider: resolved.display_name,
-                api_method: format!("openai-compatible:{}", resolved.id),
-                available: true,
-                detail,
-                cheapness: None,
-            });
-        }
-        None
-    }
-
-    fn remote_openai_compatible_profile_models(
-        resolved: &crate::provider_catalog::ResolvedOpenAiCompatibleProfile,
-        profile: crate::provider_catalog::OpenAiCompatibleProfile,
-    ) -> Vec<(String, bool)> {
-        let mut models = Vec::new();
-        let mut push = |model: String, from_live_catalog: bool| {
-            let model = model.trim().to_string();
-            if !model.is_empty() && !models.iter().any(|(existing, _)| existing == &model) {
-                models.push((model, from_live_catalog));
-            }
-        };
-
-        if let Some(cache) =
-            jcode_provider_openrouter::load_disk_cache_entry_for_namespace(&resolved.id)
-        {
-            let source_matches = cache
-                .source_api_base
-                .as_deref()
-                .and_then(crate::provider_catalog::normalize_api_base)
-                == crate::provider_catalog::normalize_api_base(&resolved.api_base);
-            if source_matches {
-                for model in cache.models {
-                    push(model.id, true);
-                }
-            }
-        }
-
-        for model in crate::provider_catalog::openai_compatible_profile_static_models(profile) {
-            push(model, false);
-        }
-
-        models
-    }
-
-    pub(super) fn remote_model_is_server_copilot_only(model: &str) -> bool {
-        !model.is_empty()
-            && !model.contains('/')
-            && Self::remote_openai_compatible_route_for_model(model).is_none()
-            && !matches!(
-                crate::provider::provider_for_model(model),
-                Some("claude" | "openai" | "gemini" | "cursor")
-            )
+        crate::provider::remote_model_routes_lightweight_fallback(
+            self.remote_provider_name.as_deref(),
+            &self.remote_available_entries,
+            current_model,
+        )
     }
 
     pub(super) fn handle_inline_interactive_preview_key(
@@ -2738,11 +2270,9 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::{
-        App, append_simplified_anthropic_model_routes, model_picker_provider_labels_match,
-        model_picker_route_is_current, model_picker_route_is_default,
-        model_picker_route_is_recommended,
+        model_picker_provider_labels_match, model_picker_route_is_current,
+        model_picker_route_is_default, model_picker_route_is_recommended,
     };
-    use crate::auth::{AuthState, AuthStatus, ProviderAuth};
     use crate::tui::PickerOption;
 
     fn picker_option_with_method(provider: &str, api_method: &str) -> PickerOption {
@@ -2757,149 +2287,6 @@ mod tests {
 
     fn picker_option(provider: &str) -> PickerOption {
         picker_option_with_method(provider, "test")
-    }
-
-    struct EnvGuard {
-        vars: Vec<(&'static str, Option<std::ffi::OsString>)>,
-        _temp: tempfile::TempDir,
-        _lock: std::sync::MutexGuard<'static, ()>,
-    }
-
-    impl EnvGuard {
-        fn new() -> Self {
-            let lock = crate::storage::lock_test_env();
-            let temp = tempfile::tempdir().expect("tempdir");
-            let vars = vec![
-                ("JCODE_HOME", std::env::var_os("JCODE_HOME")),
-                ("OPENCODE_API_KEY", std::env::var_os("OPENCODE_API_KEY")),
-            ];
-            crate::env::set_var("JCODE_HOME", temp.path());
-            crate::env::set_var("OPENCODE_API_KEY", "sk-test-opencode");
-            Self {
-                vars,
-                _temp: temp,
-                _lock: lock,
-            }
-        }
-
-        fn save_opencode_cache(&self, source_api_base: &str, model_ids: &[&str]) {
-            let jcode_home = std::env::var_os("JCODE_HOME").expect("JCODE_HOME set");
-            let cache_dir = std::path::PathBuf::from(jcode_home).join("cache");
-            std::fs::create_dir_all(&cache_dir).expect("create cache dir");
-            let cache = jcode_provider_openrouter::DiskCache {
-                cached_at: jcode_provider_openrouter::current_unix_secs()
-                    .expect("current unix time"),
-                source_api_base: Some(source_api_base.to_string()),
-                models: model_ids
-                    .iter()
-                    .map(|id| jcode_provider_openrouter::ModelInfo {
-                        id: (*id).to_string(),
-                        name: String::new(),
-                        context_length: None,
-                        pricing: jcode_provider_openrouter::ModelPricing::default(),
-                        created: None,
-                    })
-                    .collect(),
-            };
-            std::fs::write(
-                cache_dir.join("opencode_models.json"),
-                serde_json::to_string(&cache).expect("serialize cache"),
-            )
-            .expect("write cache");
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            for (key, value) in self.vars.drain(..) {
-                if let Some(value) = value {
-                    crate::env::set_var(key, value);
-                } else {
-                    crate::env::remove_var(key);
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn simplified_anthropic_routes_preserve_oauth_vs_api_key_state_space() {
-        for (has_oauth, has_api_key, expected_methods) in [
-            (true, false, vec!["claude-oauth"]),
-            (false, true, vec!["api-key"]),
-            (true, true, vec!["claude-oauth", "api-key"]),
-            (false, false, vec!["claude-oauth"]),
-        ] {
-            let auth = AuthStatus {
-                anthropic: ProviderAuth {
-                    state: if has_oauth || has_api_key {
-                        AuthState::Available
-                    } else {
-                        AuthState::NotConfigured
-                    },
-                    has_oauth,
-                    has_api_key,
-                },
-                ..AuthStatus::default()
-            };
-            let mut routes = Vec::new();
-
-            append_simplified_anthropic_model_routes(
-                &mut routes,
-                "claude-opus-4-6".to_string(),
-                &auth,
-            );
-
-            let methods = routes
-                .iter()
-                .map(|route| route.api_method.as_str())
-                .collect::<Vec<_>>();
-            assert_eq!(
-                methods, expected_methods,
-                "oauth={has_oauth} api={has_api_key}"
-            );
-            assert!(routes.iter().all(|route| route.provider == "Anthropic"));
-            assert_eq!(
-                routes.iter().all(|route| route.available),
-                has_oauth || has_api_key
-            );
-        }
-    }
-
-    #[test]
-    fn remote_compatible_route_uses_live_cache_and_does_not_mark_fallback() {
-        let guard = EnvGuard::new();
-        guard.save_opencode_cache("https://opencode.ai/zen/v1", &["qwen3.6-plus"]);
-
-        let route = App::remote_openai_compatible_route_for_model("qwen3.6-plus")
-            .expect("live-cache-only OpenCode model should be routed");
-
-        assert_eq!(route.provider, "OpenCode Zen");
-        assert_eq!(route.api_method, "openai-compatible:opencode");
-        assert_eq!(route.detail, "https://opencode.ai/zen/v1");
-        assert!(!route.detail.contains("fallback"));
-    }
-
-    #[test]
-    fn remote_compatible_route_marks_static_model_list_fallback() {
-        let _guard = EnvGuard::new();
-
-        let route = App::remote_openai_compatible_route_for_model("glm-4.7")
-            .expect("static OpenCode fallback model should be routed");
-
-        assert_eq!(route.provider, "OpenCode Zen");
-        assert!(
-            route
-                .detail
-                .contains("fallback: static provider model list")
-        );
-    }
-
-    #[test]
-    fn remote_compatible_route_ignores_live_cache_from_wrong_api_base() {
-        let guard = EnvGuard::new();
-        guard.save_opencode_cache("https://wrong.example.test/v1", &["qwen3.6-plus"]);
-
-        assert!(App::remote_openai_compatible_route_for_model("qwen3.6-plus").is_none());
     }
 
     #[test]

@@ -182,6 +182,7 @@ pub fn provider_model_to_select_after_auth(
 }
 
 fn route_matches_activation(route: &ModelRoute, activation: &AuthActivationResult) -> bool {
+    let api_method = route.api_method_kind();
     let Some(provider_id) = activation.provider_id.as_deref() else {
         if let Some(label) = activation.provider_label.as_deref()
             && route.provider.eq_ignore_ascii_case(label)
@@ -191,10 +192,7 @@ fn route_matches_activation(route: &ModelRoute, activation: &AuthActivationResul
         return false;
     };
 
-    if route
-        .api_method
-        .eq_ignore_ascii_case(&format!("openai-compatible:{provider_id}"))
-    {
+    if api_method.matches_openai_compatible_profile(provider_id) {
         return true;
     }
 
@@ -204,21 +202,29 @@ fn route_matches_activation(route: &ModelRoute, activation: &AuthActivationResul
 
     match provider_id {
         "claude" => {
-            return route.api_method.eq_ignore_ascii_case("claude-oauth")
-                || route.api_method.eq_ignore_ascii_case("claude");
+            return matches!(
+                api_method,
+                crate::provider::ModelRouteApiMethod::ClaudeOAuth
+            );
         }
         "claude-api" => {
             return route.provider.eq_ignore_ascii_case("Anthropic")
-                && (route.api_method.eq_ignore_ascii_case("api-key")
-                    || route.api_method.eq_ignore_ascii_case("claude-api"));
+                && matches!(
+                    api_method,
+                    crate::provider::ModelRouteApiMethod::AnthropicApiKey
+                );
         }
         "openai" => {
-            return route.api_method.eq_ignore_ascii_case("openai-oauth")
-                || route.api_method.eq_ignore_ascii_case("openai");
+            return matches!(
+                api_method,
+                crate::provider::ModelRouteApiMethod::OpenAIOAuth
+            );
         }
         "openai-api" => {
-            return route.api_method.eq_ignore_ascii_case("openai-api-key")
-                || route.api_method.eq_ignore_ascii_case("openai-api");
+            return matches!(
+                api_method,
+                crate::provider::ModelRouteApiMethod::OpenAIApiKey
+            );
         }
         _ => {}
     }
