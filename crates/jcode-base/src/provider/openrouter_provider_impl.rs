@@ -25,6 +25,16 @@ impl Provider for OpenRouterProvider {
         let include_reasoning_content =
             thinking_enabled == Some(true) || (allow_reasoning && Self::is_kimi_model(&model));
 
+        // Some OpenAI-compatible providers (e.g. Mistral) strictly enforce the
+        // OpenAI schema and reject the non-standard `reasoning_content` message
+        // field and top-level `thinking` request field with a 422 error
+        // ("Extra inputs are not permitted"). Suppress both for those endpoints
+        // regardless of any thinking override (issue #261).
+        let strict_openai_schema =
+            Self::strict_openai_schema_endpoint(self.profile_id.as_deref(), &self.api_base);
+        let allow_reasoning = allow_reasoning && !strict_openai_schema;
+        let include_reasoning_content = include_reasoning_content && !strict_openai_schema;
+
         let mut effective_messages: Vec<Message> = messages.to_vec();
         let cache_supported = self.model_supports_cache(&model).await;
         let cache_control_added = if cache_supported {
@@ -548,8 +558,11 @@ impl Provider for OpenRouterProvider {
         }
 
         // Optional thinking override for OpenRouter (provider-specific).
+        // Skip for strict OpenAI-schema endpoints (e.g. Mistral) which reject
+        // the non-standard top-level `thinking` field with a 422 (issue #261).
         if let Some(enable) = thinking_enabled
             && !sent_reasoning_config
+            && !strict_openai_schema
         {
             request["thinking"] = serde_json::json!({
                 "type": if enable { "enabled" } else { "disabled" }

@@ -1505,3 +1505,45 @@ fn test_endpoint_detail_string() {
         detail
     );
 }
+
+#[test]
+fn strict_openai_schema_endpoint_detects_mistral_profile() {
+    // Mistral direct profile rejects non-standard reasoning_content/thinking
+    // fields with a 422 (issue #261), so it must be flagged strict.
+    assert!(OpenRouterProvider::strict_openai_schema_endpoint(
+        Some("mistral"),
+        "https://api.mistral.ai/v1"
+    ));
+    assert!(OpenRouterProvider::strict_openai_schema_endpoint(
+        Some("MISTRAL"),
+        "https://example.com/v1"
+    ));
+}
+
+#[test]
+fn strict_openai_schema_endpoint_detects_mistral_api_base() {
+    assert!(OpenRouterProvider::strict_openai_schema_endpoint(
+        None,
+        "https://api.mistral.ai/v1"
+    ));
+    assert!(OpenRouterProvider::strict_openai_schema_endpoint(
+        Some("custom"),
+        "https://API.MISTRAL.AI/v1"
+    ));
+}
+
+#[test]
+fn strict_openai_schema_endpoint_allows_other_providers() {
+    assert!(!OpenRouterProvider::strict_openai_schema_endpoint(
+        Some("deepseek"),
+        "https://api.deepseek.com"
+    ));
+    assert!(!OpenRouterProvider::strict_openai_schema_endpoint(
+        None,
+        "https://openrouter.ai/api/v1"
+    ));
+    assert!(!OpenRouterProvider::strict_openai_schema_endpoint(
+        Some("openai"),
+        "https://api.openai.com/v1"
+    ));
+}

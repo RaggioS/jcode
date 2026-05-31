@@ -187,10 +187,19 @@ async fn stream_response(
 
     let mut stream = OpenRouterStream::new(response.bytes_stream(), model.clone(), provider_pin);
 
-    const SSE_CHUNK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
+    // Idle timeout between streamed chunks. Configurable so slow reasoning
+    // models (e.g. DeepSeek) that think silently for minutes before emitting
+    // tokens don't trip a premature timeout (issue #196). Resolved from
+    // `[provider] stream_idle_timeout_secs` / `JCODE_STREAM_IDLE_TIMEOUT_SECS`,
+    // defaulting to 180s.
+    let idle_timeout_secs = crate::config::config()
+        .provider
+        .stream_idle_timeout_secs
+        .max(1);
+    let sse_chunk_timeout = std::time::Duration::from_secs(idle_timeout_secs);
 
     loop {
-        let event = match tokio::time::timeout(SSE_CHUNK_TIMEOUT, stream.next()).await {
+        let event = match tokio::time::timeout(sse_chunk_timeout, stream.next()).await {
             Ok(Some(Ok(event))) => event,
             Ok(Some(Err(e))) => anyhow::bail!(
                 "OpenAI-compatible stream error\n  endpoint: {}\n  model: {}\n  auth: {}\n  error: {}",
@@ -201,12 +210,16 @@ async fn stream_response(
             ),
             Ok(None) => break, // stream ended normally
             Err(_) => {
-                crate::logging::warn("OpenRouter SSE stream timed out (no data for 180s)");
+                crate::logging::warn(&format!(
+                    "OpenRouter SSE stream timed out (no data for {}s)",
+                    idle_timeout_secs
+                ));
                 anyhow::bail!(
-                    "OpenAI-compatible stream timeout\n  endpoint: {}\n  model: {}\n  auth: {}\n  timeout: no data received for 180 seconds\n{}",
+                    "OpenAI-compatible stream timeout\n  endpoint: {}\n  model: {}\n  auth: {}\n  timeout: no data received for {} seconds\n{}",
                     url,
                     model,
                     auth.label(),
+                    idle_timeout_secs,
                     local_endpoint_troubleshooting_hint(&api_base, &model)
                 );
             }
