@@ -314,7 +314,7 @@ pub(crate) fn build_single_session_vertices_with_scroll_and_reveal(
     if app.has_activity_indicator() {
         push_streaming_activity_cue(&mut vertices, app, size, spinner_tick, None, None);
     }
-    push_single_session_selection(&mut vertices, app, size);
+    push_single_session_selection(&mut vertices, app, size, None);
     push_single_session_scrollbar(
         &mut vertices,
         app,
@@ -569,7 +569,7 @@ fn build_single_session_vertices_with_cached_body_internal(
             activity_cue_motion,
         );
     }
-    push_single_session_selection(&mut vertices, app, size);
+    push_single_session_selection(&mut vertices, app, size, Some(&viewport.lines));
     push_single_session_scrollbar_for_total_lines(
         &mut vertices,
         app,
@@ -7909,6 +7909,7 @@ fn push_single_session_selection(
     vertices: &mut Vec<Vertex>,
     app: &SingleSessionApp,
     size: PhysicalSize<u32>,
+    visible_body_lines: Option<&[SingleSessionStyledLine]>,
 ) {
     if !app.has_body_selection() && !app.has_draft_selection() {
         return;
@@ -7917,7 +7918,12 @@ fn push_single_session_selection(
     let typography = single_session_typography_for_scale(app.text_scale());
     let line_height = typography.body_size * typography.body_line_height;
     let char_width = single_session_body_char_width();
-    let visible_lines = single_session_visible_body(app, size);
+    let visible_lines_storage = if let Some(lines) = visible_body_lines {
+        lines.iter().map(|line| line.text.clone()).collect::<Vec<_>>()
+    } else {
+        single_session_visible_body(app, size)
+    };
+    let visible_lines = &visible_lines_storage;
     let body_top = single_session_body_top_for_app(app, size);
     for segment in app.selection_segments(&visible_lines) {
         let selected_columns = segment
