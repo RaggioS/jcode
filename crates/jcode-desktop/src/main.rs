@@ -107,13 +107,13 @@ const DESKTOP_RELOAD_HANDOFF_POLL_INTERVAL: Duration = Duration::from_millis(25)
 const DESKTOP_RELOAD_HANDOFF_TIMEOUT: Duration = Duration::from_secs(8);
 const DESKTOP_RELOAD_STARTUP_RELEASE_TIMEOUT: Duration = Duration::from_secs(3);
 const DESKTOP_RELOAD_MAX_RESTORED_DIMENSION: u32 = 32_768;
-const OUTER_PADDING: f32 = 8.0;
-const GAP: f32 = 6.0;
+const OUTER_PADDING: f32 = 12.0;
+const GAP: f32 = 10.0;
 const STATUS_BAR_HEIGHT: f32 = 30.0;
 const FOCUSED_BORDER_WIDTH: f32 = 2.0;
 const UNFOCUSED_BORDER_WIDTH: f32 = 1.5;
-const PANEL_RADIUS: f32 = 8.0;
-const STATUS_RADIUS: f32 = 7.0;
+const PANEL_RADIUS: f32 = 12.0;
+const STATUS_RADIUS: f32 = 9.0;
 const ROUNDED_CORNER_SEGMENTS: usize = 6;
 const PANEL_FIT_TOLERANCE: f32 = 0.15;
 const STATUS_PREVIEW_LANE_RADIUS: i32 = 2;
@@ -508,13 +508,13 @@ const CLEAR_COLOR: wgpu::Color = wgpu::Color {
     a: 1.0,
 };
 
-const BACKGROUND_TOP_LEFT: [f32; 4] = [0.858, 0.910, 1.000, 1.0];
-const BACKGROUND_TOP_RIGHT: [f32; 4] = [0.945, 0.884, 1.000, 1.0];
-const BACKGROUND_BOTTOM_RIGHT: [f32; 4] = [0.846, 0.972, 0.910, 1.0];
-const BACKGROUND_BOTTOM_LEFT: [f32; 4] = [0.930, 0.950, 0.988, 1.0];
-const FOCUS_RING_COLOR: [f32; 4] = [0.165, 0.185, 0.225, 0.94];
-const NAV_STATUS_COLOR: [f32; 4] = [0.184, 0.204, 0.251, 1.0];
-const INSERT_STATUS_COLOR: [f32; 4] = [0.310, 0.435, 0.376, 1.0];
+const BACKGROUND_TOP_LEFT: [f32; 4] = [0.890, 0.930, 1.000, 1.0];
+const BACKGROUND_TOP_RIGHT: [f32; 4] = [0.960, 0.910, 1.000, 1.0];
+const BACKGROUND_BOTTOM_RIGHT: [f32; 4] = [0.875, 0.980, 0.930, 1.0];
+const BACKGROUND_BOTTOM_LEFT: [f32; 4] = [0.945, 0.960, 0.995, 1.0];
+const FOCUS_RING_COLOR: [f32; 4] = [0.135, 0.155, 0.205, 0.90];
+const NAV_STATUS_COLOR: [f32; 4] = [0.145, 0.165, 0.220, 1.0];
+const INSERT_STATUS_COLOR: [f32; 4] = [0.245, 0.395, 0.340, 1.0];
 const STATUS_PREVIEW_ACTIVE_GROUP_COLOR: [f32; 4] = [0.953, 0.965, 0.984, 0.16];
 const STATUS_PREVIEW_EMPTY_FOCUSED_COLOR: [f32; 4] = [0.953, 0.965, 0.984, 0.50];
 const STATUS_PREVIEW_VIEWPORT_COLOR: [f32; 4] = [0.953, 0.965, 0.984, 0.78];
@@ -536,13 +536,13 @@ const TOOL_RUNNING_TEXT_COLOR: [f32; 4] = [0.045, 0.265, 0.640, 1.0];
 const TOOL_SUCCESS_TEXT_COLOR: [f32; 4] = [0.035, 0.360, 0.220, 1.0];
 const TOOL_FAILED_TEXT_COLOR: [f32; 4] = [0.560, 0.070, 0.095, 1.0];
 const TOOL_PENDING_TEXT_COLOR: [f32; 4] = [0.320, 0.345, 0.405, 1.0];
-const TOOL_CARD_BACKGROUND_COLOR: [f32; 4] = [0.985, 0.990, 1.000, 0.56];
-const TOOL_CARD_ACTIVE_BACKGROUND_COLOR: [f32; 4] = [0.890, 0.945, 1.000, 0.62];
-const TOOL_CARD_SUCCESS_BACKGROUND_COLOR: [f32; 4] = [0.875, 0.975, 0.925, 0.46];
-const TOOL_CARD_FAILED_BACKGROUND_COLOR: [f32; 4] = [1.000, 0.900, 0.910, 0.54];
-const TOOL_CARD_GROUP_BACKGROUND_COLOR: [f32; 4] = [0.945, 0.930, 1.000, 0.40];
-const TOOL_CARD_BORDER_COLOR: [f32; 4] = [0.105, 0.165, 0.295, 0.16];
-const TOOL_CARD_ACTIVE_BORDER_COLOR: [f32; 4] = [0.000, 0.260, 0.720, 0.28];
+const TOOL_CARD_BACKGROUND_COLOR: [f32; 4] = [0.985, 0.990, 1.000, 0.68];
+const TOOL_CARD_ACTIVE_BACKGROUND_COLOR: [f32; 4] = [0.890, 0.945, 1.000, 0.72];
+const TOOL_CARD_SUCCESS_BACKGROUND_COLOR: [f32; 4] = [0.875, 0.975, 0.925, 0.56];
+const TOOL_CARD_FAILED_BACKGROUND_COLOR: [f32; 4] = [1.000, 0.900, 0.910, 0.64];
+const TOOL_CARD_GROUP_BACKGROUND_COLOR: [f32; 4] = [0.945, 0.930, 1.000, 0.50];
+const TOOL_CARD_BORDER_COLOR: [f32; 4] = [0.105, 0.165, 0.295, 0.22];
+const TOOL_CARD_ACTIVE_BORDER_COLOR: [f32; 4] = [0.000, 0.260, 0.720, 0.36];
 const TOOL_TIMELINE_RAIL_COLOR: [f32; 4] = [0.105, 0.165, 0.295, 0.20];
 const TOOL_TIMELINE_ACTIVE_RAIL_COLOR: [f32; 4] = [0.000, 0.260, 0.720, 0.46];
 const TOOL_OUTPUT_DRAWER_COLOR: [f32; 4] = [0.030, 0.055, 0.095, 0.070];
@@ -562,10 +562,10 @@ const WELCOME_AURORA_MINT: [f32; 4] = [0.220, 0.840, 0.660, 0.115];
 const WELCOME_AURORA_WARM: [f32; 4] = [1.000, 0.620, 0.360, 0.075];
 const WELCOME_HANDWRITING_COLOR: [f32; 4] = [0.012, 0.080, 0.250, 0.94];
 const NATIVE_SPINNER_HEAD_COLOR: [f32; 4] = [0.000, 0.260, 0.720, 1.0];
-const CODE_BLOCK_BACKGROUND_COLOR: [f32; 4] = [0.075, 0.095, 0.135, 0.075];
-const INLINE_CODE_BACKGROUND_COLOR: [f32; 4] = [0.075, 0.095, 0.135, 0.135];
-const QUOTE_CARD_BACKGROUND_COLOR: [f32; 4] = [0.520, 0.330, 0.760, 0.070];
-const TABLE_CARD_BACKGROUND_COLOR: [f32; 4] = [0.080, 0.460, 0.520, 0.060];
+const CODE_BLOCK_BACKGROUND_COLOR: [f32; 4] = [0.075, 0.095, 0.135, 0.105];
+const INLINE_CODE_BACKGROUND_COLOR: [f32; 4] = [0.075, 0.095, 0.135, 0.175];
+const QUOTE_CARD_BACKGROUND_COLOR: [f32; 4] = [0.520, 0.330, 0.760, 0.090];
+const TABLE_CARD_BACKGROUND_COLOR: [f32; 4] = [0.080, 0.460, 0.520, 0.085];
 const ERROR_CARD_BACKGROUND_COLOR: [f32; 4] = [0.850, 0.170, 0.170, 0.105];
 const OVERLAY_SELECTION_BACKGROUND_COLOR: [f32; 4] = [0.280, 0.470, 0.780, 0.115];
 const STATUS_PREVIEW_ACCENTS: [[f32; 3]; 8] = [
@@ -5610,10 +5610,11 @@ impl DesktopHotReloader {
     }
 
     fn drain_app_worker_messages(&mut self) -> DesktopWorkerDrain {
-        let Some(worker) = self.app_worker.as_ref() else {
+        let Some(worker) = self.app_worker.as_mut() else {
             return DesktopWorkerDrain::default();
         };
         let mut drained = DesktopWorkerDrain::default();
+        let mut should_drop_worker = false;
         while let Some(message) = worker.try_recv() {
             match message {
                 Ok(DesktopWorkerToHostMessage::Ready(ready)) => {
@@ -5656,8 +5657,35 @@ impl DesktopHotReloader {
                     desktop_log::error(format_args!(
                         "jcode-desktop: failed to read app worker message: {error:#}"
                     ));
+                    should_drop_worker = true;
                     break;
                 }
+            }
+        }
+        if !should_drop_worker {
+            match worker.try_wait() {
+                Ok(Some(status)) => {
+                    desktop_log::warn(format_args!(
+                        "jcode-desktop: app worker process exited unexpectedly: {status}"
+                    ));
+                    should_drop_worker = true;
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    desktop_log::warn(format_args!(
+                        "jcode-desktop: failed to poll app worker process: {error:#}"
+                    ));
+                    should_drop_worker = true;
+                }
+            }
+        }
+        if should_drop_worker {
+            if let Some(worker) = self.app_worker.take()
+                && let Err(error) = worker.kill()
+            {
+                desktop_log::warn(format_args!(
+                    "jcode-desktop: failed to clean up stopped app worker: {error:#}"
+                ));
             }
         }
         drained
