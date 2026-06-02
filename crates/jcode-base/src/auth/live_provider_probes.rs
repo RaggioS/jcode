@@ -95,7 +95,7 @@ pub async fn fetch_live_openai_compatible_models(
     let models = parsed
         .data
         .into_iter()
-        .map(|model| model.id.trim().to_string())
+        .map(|model| normalize_openai_compatible_model_id(&resolved, model.id.trim()))
         .filter(|model| {
             !model.is_empty()
                 && crate::provider_catalog::openai_compatible_profile_model_supports_chat(
@@ -110,6 +110,27 @@ pub async fn fetch_live_openai_compatible_models(
         resolved.display_name
     );
     Ok(models)
+}
+
+/// Normalize a model id returned by a provider's `/models` endpoint into the
+/// bare id jcode uses for routing and coverage keys.
+///
+/// Google's OpenAI-compatible Gemini surface returns ids prefixed with
+/// `models/` (e.g. `models/gemini-2.5-flash`); chat/stream/tool calls accept
+/// either form, but the coverage ledger and picker want the bare name so the
+/// pair lines up with the native `gemini` provider's models.
+fn normalize_openai_compatible_model_id(
+    resolved: &ResolvedOpenAiCompatibleProfile,
+    model: &str,
+) -> String {
+    if resolved
+        .api_base
+        .to_ascii_lowercase()
+        .contains("generativelanguage.googleapis.com")
+    {
+        return model.trim_start_matches("models/").to_string();
+    }
+    model.to_string()
 }
 
 pub async fn run_live_openai_compatible_smoke(
@@ -173,6 +194,43 @@ pub async fn run_live_openai_compatible_smoke(
         }
     }
     Ok(stage)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::provider_catalog::resolve_openai_compatible_profile;
+    use jcode_provider_metadata::{
+        GEMINI_OPENAI_COMPAT_PROFILE, OPENAI_NATIVE_OPENAI_COMPAT_PROFILE,
+    };
+
+    #[test]
+    fn gemini_openai_compat_strips_models_prefix_from_catalog_ids() {
+        let resolved = resolve_openai_compatible_profile(GEMINI_OPENAI_COMPAT_PROFILE);
+        assert_eq!(
+            normalize_openai_compatible_model_id(&resolved, "models/gemini-2.5-flash"),
+            "gemini-2.5-flash"
+        );
+        // Already-bare ids pass through unchanged.
+        assert_eq!(
+            normalize_openai_compatible_model_id(&resolved, "gemini-2.5-pro"),
+            "gemini-2.5-pro"
+        );
+    }
+
+    #[test]
+    fn non_gemini_openai_compat_leaves_model_ids_untouched() {
+        let resolved = resolve_openai_compatible_profile(OPENAI_NATIVE_OPENAI_COMPAT_PROFILE);
+        // A leading `models/` segment on a non-Gemini host is not stripped.
+        assert_eq!(
+            normalize_openai_compatible_model_id(&resolved, "models/gpt-5.1"),
+            "models/gpt-5.1"
+        );
+        assert_eq!(
+            normalize_openai_compatible_model_id(&resolved, "gpt-5.1"),
+            "gpt-5.1"
+        );
+    }
 }
 
 pub async fn run_live_openai_compatible_stream_smoke(
