@@ -361,3 +361,87 @@ pub fn log_candidate_filter(
         })),
     );
 }
+
+/// Remove `memory-events-*.jsonl` files older than the documented 14-day
+/// retention window. The general log rotation deliberately leaves these files
+/// alone (they are analysis data, not debug logs), so this is the only place
+/// that prunes them.
+pub fn cleanup_old_memory_logs() {
+    if let Some(dir) = log_dir() {
+        cleanup_old_memory_logs_in(&dir, Local::now());
+    }
+}
+
+/// Core of [`cleanup_old_memory_logs`], parameterized on the directory and
+/// "now" for unit testing without touching the real log directory.
+fn cleanup_old_memory_logs_in(dir: &std::path::Path, now: chrono::DateTime<Local>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let cutoff = now - chrono::Duration::days(14);
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if !(name.starts_with("memory-events-") && name.ends_with(".jsonl")) {
+            continue;
+        }
+        if let Ok(metadata) = entry.metadata()
+            && metadata.is_file()
+            && let Ok(modified) = metadata.modified()
+        {
+            let modified: chrono::DateTime<Local> = modified.into();
+            if modified < cutoff {
+                let _ = fs::remove_file(entry.path());
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write as _;
+    use std::time::{Duration, SystemTime};
+
+    #[test]
+    fn memory_log_cleanup_respects_14_day_window() {
+        let dir = std::env::temp_dir().join(format!(
+            "jcode-mem-cleanup-test-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        fs::create_dir_all(&dir).expect("create temp dir");
+
+        let write = |name: &str, age_days: u64| {
+            let path = dir.join(name);
+            let mut f = File::create(&path).expect("create");
+            f.write_all(b"{}\n").ok();
+            if age_days > 0 {
+                let mtime = SystemTime::now() - Duration::from_secs(age_days * 24 * 60 * 60);
+                f.set_modified(mtime).expect("set mtime");
+            }
+            path
+        };
+
+        // 20 days old: past the 14-day window -> deleted.
+        let old = write("memory-events-2000-01-01.jsonl", 20);
+        // 10 days old: within the window -> kept.
+        let recent = write("memory-events-2000-02-01.jsonl", 10);
+        // Old, but not a memory-events file -> must be left alone here.
+        let other = write("jcode-2000-01-01.log", 20);
+
+        cleanup_old_memory_logs_in(&dir, Local::now());
+
+        assert!(!old.exists(), "20-day-old memory log should be deleted");
+        assert!(recent.exists(), "10-day-old memory log must survive");
+        assert!(
+            other.exists(),
+            "non-memory files are out of scope for this cleanup"
+        );
+
+        fs::remove_dir_all(&dir).ok();
+    }
+}
