@@ -23,20 +23,33 @@ SELECT
     MIN(created_at) AS first_seen_at,
     MAX(created_at) AS last_seen_at,
     1 AS raw_active,
-    MAX(CASE WHEN event IN ('session_end', 'session_crash') AND (
-        turns > 0 OR had_user_prompt > 0 OR had_assistant_response > 0
-        OR assistant_responses > 0 OR tool_calls > 0 OR executed_tool_calls > 0
-        OR duration_secs > 0 OR error_provider_timeout > 0 OR error_auth_failed > 0
-        OR error_tool_error > 0 OR error_mcp_error > 0 OR error_rate_limited > 0
-        OR provider_switches > 0 OR model_switches > 0
+    MAX(CASE WHEN (
+        event IN ('session_end', 'session_crash') AND (
+            turns > 0 OR had_user_prompt > 0 OR had_assistant_response > 0
+            OR assistant_responses > 0 OR tool_calls > 0 OR executed_tool_calls > 0
+            OR duration_secs > 0 OR error_provider_timeout > 0 OR error_auth_failed > 0
+            OR error_tool_error > 0 OR error_mcp_error > 0 OR error_rate_limited > 0
+            OR provider_switches > 0 OR model_switches > 0
+        )
+    ) OR (
+        event = 'turn_end' AND (
+            assistant_responses > 0 OR tool_calls > 0 OR executed_tool_calls > 0
+            OR file_write_calls > 0 OR tests_run > 0 OR turn_success > 0
+        )
     ) THEN 1 ELSE 0 END) AS meaningful_active,
     MAX(CASE WHEN build_channel = 'release' THEN 1 ELSE 0 END) AS release_active,
-    MAX(CASE WHEN build_channel = 'release' AND event IN ('session_end', 'session_crash') AND (
-        turns > 0 OR had_user_prompt > 0 OR had_assistant_response > 0
-        OR assistant_responses > 0 OR tool_calls > 0 OR executed_tool_calls > 0
-        OR duration_secs > 0 OR error_provider_timeout > 0 OR error_auth_failed > 0
-        OR error_tool_error > 0 OR error_mcp_error > 0 OR error_rate_limited > 0
-        OR provider_switches > 0 OR model_switches > 0
+    MAX(CASE WHEN build_channel = 'release' AND (
+        (event IN ('session_end', 'session_crash') AND (
+            turns > 0 OR had_user_prompt > 0 OR had_assistant_response > 0
+            OR assistant_responses > 0 OR tool_calls > 0 OR executed_tool_calls > 0
+            OR duration_secs > 0 OR error_provider_timeout > 0 OR error_auth_failed > 0
+            OR error_tool_error > 0 OR error_mcp_error > 0 OR error_rate_limited > 0
+            OR provider_switches > 0 OR model_switches > 0
+        ))
+        OR (event = 'turn_end' AND (
+            assistant_responses > 0 OR tool_calls > 0 OR executed_tool_calls > 0
+            OR file_write_calls > 0 OR tests_run > 0 OR turn_success > 0
+        ))
     ) THEN 1 ELSE 0 END) AS meaningful_release_active,
     SUM(CASE WHEN event = 'session_start' THEN 1 ELSE 0 END) AS session_start_count,
     SUM(CASE WHEN event = 'turn_end' THEN 1 ELSE 0 END) AS turn_end_count,

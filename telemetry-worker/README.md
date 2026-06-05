@@ -151,6 +151,7 @@ wrangler d1 execute jcode-telemetry --command "SELECT AVG(first_assistant_respon
 
 - DAU/WAU/MAU should be distinct `telemetry_id` counts, never event counts. Heavy users and long-running agents can emit thousands of `turn_end` events in a day.
 - Use `meaningful_release_active` for headline product usage. It excludes local/dev/git-checkout traffic and open/close sessions with no meaningful lifecycle activity.
+- Meaningful activity is derived from `session_end`/`session_crash` **and** `turn_end` events. A `turn_end` only fires after a real user turn completes, so counting it keeps the metric accurate for users whose `session_end` is lost (process killed, machine shutdown, dropped final flush, or a session still open at UTC midnight).
 - Raw events remain the source of truth. The `daily_active_users` table is an ingest-time rollup for cheap dashboard queries and is backfillable from `events`.
 - The worker uses `INSERT OR IGNORE` keyed by `event_id`; rollups and detail rows are updated only when the canonical raw event insert succeeds, so client retries do not inflate counts.
 - Telemetry still undercounts users who opt out (`JCODE_NO_TELEMETRY`, `DO_NOT_TRACK`, `~/.jcode/no_telemetry`) or whose network blocks telemetry, and may overcount one person using multiple machines.
