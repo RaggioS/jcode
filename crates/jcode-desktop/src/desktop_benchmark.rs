@@ -43,6 +43,22 @@ pub(super) fn resize_render_benchmark_frames(args: &[String]) -> Option<usize> {
     })
 }
 
+/// Parse `--real-transcript-scroll-benchmark[=N]`, the number of scroll frames
+/// to profile against each of the user's largest real on-disk transcripts.
+pub(super) fn real_transcript_scroll_benchmark_frames(args: &[String]) -> Option<usize> {
+    args.iter().enumerate().find_map(|(index, arg)| {
+        arg.strip_prefix("--real-transcript-scroll-benchmark=")
+            .and_then(|value| value.parse::<usize>().ok())
+            .or_else(|| {
+                (arg == "--real-transcript-scroll-benchmark").then(|| {
+                    args.get(index + 1)
+                        .and_then(|value| value.parse::<usize>().ok())
+                        .unwrap_or(600)
+                })
+            })
+    })
+}
+
 pub(super) fn benchmark_phase(
     mut frames: usize,
     mut run_frame: impl FnMut(usize) -> usize,

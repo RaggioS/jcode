@@ -90,6 +90,78 @@ pub fn load_session_transcript_by_id(
     Ok(None)
 }
 
+/// A full, uncapped transcript loaded straight from disk, used by the
+/// real-transcript scroll benchmark so we profile the production render path
+/// against the user's actual session content rather than synthetic fixtures.
+#[derive(Debug, Clone)]
+pub struct BenchmarkTranscript {
+    pub session_id: String,
+    pub title: String,
+    pub file_bytes: u64,
+    pub messages: Vec<SessionTranscriptMessage>,
+}
+
+/// Load the largest real session transcripts on disk (by file size), returning
+/// the full message list for each (no card-style truncation). Used only by the
+/// scroll benchmark. Sessions with fewer than `min_messages` are skipped so the
+/// benchmark exercises long, scroll-heavy transcripts.
+pub fn load_largest_real_transcripts(
+    max_sessions: usize,
+    min_messages: usize,
+) -> Result<Vec<BenchmarkTranscript>> {
+    let sessions_dir = jcode_sessions_dir()?;
+    if !sessions_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut candidates = fs::read_dir(&sessions_dir)
+        .with_context(|| format!("failed to read {}", sessions_dir.display()))?
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| {
+            let path = entry.path();
+            session_file_candidate(path.clone())?;
+            let bytes = path.metadata().ok()?.len();
+            Some((path, bytes))
+        })
+        .collect::<Vec<_>>();
+    // Largest files first: they hold the longest transcripts and stress the
+    // windowed-scroll path the most.
+    candidates.sort_by_key(|(_, bytes)| std::cmp::Reverse(*bytes));
+
+    let mut transcripts = Vec::new();
+    for (path, bytes) in candidates {
+        if transcripts.len() >= max_sessions {
+            break;
+        }
+        let session = match load_stored_session(&path) {
+            Ok(session) => session,
+            Err(_) => continue,
+        };
+        let messages = session_transcript_messages(&session);
+        if messages.len() < min_messages {
+            continue;
+        }
+        let id = stored_string(session.id.as_deref())
+            .or_else(|| {
+                path.file_stem()
+                    .map(|stem| stem.to_string_lossy().into_owned())
+            })
+            .unwrap_or_else(|| "unknown-session".to_string());
+        let title = stored_string(session.custom_title.as_deref())
+            .or_else(|| stored_string(session.title.as_deref()))
+            .or_else(|| latest_user_preview(&messages))
+            .unwrap_or_else(|| short_session_name(&id));
+        transcripts.push(BenchmarkTranscript {
+            session_id: id,
+            title,
+            file_bytes: bytes,
+            messages,
+        });
+    }
+
+    Ok(transcripts)
+}
+
 fn load_recent_session_cards_with_limit(limit: usize) -> Result<Vec<SessionCard>> {
     let sessions_dir = jcode_sessions_dir()?;
     if !sessions_dir.exists() {

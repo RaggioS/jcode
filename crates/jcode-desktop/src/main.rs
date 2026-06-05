@@ -716,6 +716,9 @@ async fn run() -> Result<()> {
     if let Some(frames) = scroll_render_benchmark_frames(&args) {
         return run_scroll_render_benchmark(frames);
     }
+    if let Some(frames) = real_transcript_scroll_benchmark_frames(&args) {
+        return run_real_transcript_scroll_benchmark(frames);
+    }
     if let Some(output_dir) = hero_screenshot_capture_dir(&args) {
         return run_hero_screenshot_capture(&output_dir).await;
     }
@@ -2269,6 +2272,7 @@ const DESKTOP_HELP_LINES: &[&str] = &[
     "  --capture-hero-animation DIR Write deterministic hero animation PNG frames and exit",
     "  --resize-render-benchmark[N]  Print CPU resize/render benchmark JSON and exit",
     "  --scroll-render-benchmark[N]  Print CPU scroll/render benchmark JSON and exit",
+    "  --real-transcript-scroll-benchmark[N]  Profile scrolling against your real on-disk transcripts and exit",
     "  --stream-e2e-benchmark[N]     Print stream event-to-paint guardrail JSON and exit",
     "  --headless-chat-smoke <MSG>  Run a hidden backend smoke test and print JSON events",
     "  --headless-chat-smoke=<MSG>  Same as above",
@@ -5159,6 +5163,302 @@ fn run_scroll_render_benchmark(frames: usize) -> Result<()> {
         }))?
     );
     Ok(())
+}
+
+/// Profile scrolling against the user's real on-disk transcripts.
+///
+/// This loads the largest real session files (full, untruncated message lists)
+/// and drives the exact production windowed-scroll render path: cached body
+/// wrap, a sliding text-buffer window, viewport extraction, glyph shaping for
+/// the visible window, text areas, and primitive geometry. Per-frame work is
+/// reported per session and aggregated so we can attribute any scroll jank to a
+/// specific stage on real content rather than synthetic fixtures.
+fn run_real_transcript_scroll_benchmark(frames: usize) -> Result<()> {
+    let frames = frames.max(1);
+    let size = PhysicalSize::new(1200, 760);
+    let transcripts = session_data::load_largest_real_transcripts(8, 24)
+        .context("failed to load real transcripts for scroll benchmark")?;
+
+    if transcripts.is_empty() {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "frames": frames,
+                "sessions": [],
+                "note": "no real transcripts with >=24 messages found under ~/.jcode/sessions",
+            }))?
+        );
+        return Ok(());
+    }
+
+    let mut session_reports = Vec::new();
+    let mut all_frame_samples: Vec<f64> = Vec::new();
+    let mut worst_stage_us = 0.0_f64;
+    let mut worst_stage_name = String::new();
+
+    for transcript in &transcripts {
+        let report = benchmark_real_transcript_scroll(transcript, size, frames);
+        if report.worst_stage_us > worst_stage_us {
+            worst_stage_us = report.worst_stage_us;
+            worst_stage_name = report.worst_stage_name.clone();
+        }
+        all_frame_samples.extend_from_slice(&report.frame_samples);
+        session_reports.push(report);
+    }
+
+    let budget_ms = duration_ms(DESKTOP_120FPS_FRAME_BUDGET);
+    let aggregate_p50 = percentile_ms(&all_frame_samples, 0.50);
+    let aggregate_p95 = percentile_ms(&all_frame_samples, 0.95);
+    let aggregate_p99 = percentile_ms(&all_frame_samples, 0.99);
+    let aggregate_max = max_sample_ms(&all_frame_samples);
+    let passes_budget = aggregate_p99 <= budget_ms;
+
+    let sessions_json = session_reports
+        .iter()
+        .map(RealTranscriptScrollReport::to_json)
+        .collect::<Vec<_>>();
+
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "frames": frames,
+            "size": { "width": size.width, "height": size.height },
+            "target_frame_budget_ms": budget_ms,
+            "sessions_profiled": session_reports.len(),
+            "aggregate_full_scroll_frame": {
+                "frames": all_frame_samples.len(),
+                "p50_ms": aggregate_p50,
+                "p95_ms": aggregate_p95,
+                "p99_ms": aggregate_p99,
+                "max_ms": aggregate_max,
+            },
+            "worst_stage": { "name": worst_stage_name, "max_us_per_frame": worst_stage_us },
+            "passes_120fps_scroll_cpu_budget": passes_budget,
+            "sessions": sessions_json,
+        }))?
+    );
+    Ok(())
+}
+
+struct RealTranscriptScrollReport {
+    session_id: String,
+    title: String,
+    file_bytes: u64,
+    message_count: usize,
+    total_body_lines: usize,
+    max_scroll_lines: usize,
+    body_buffer_rebuilds: usize,
+    frame_samples: Vec<f64>,
+    stage_totals_us: Vec<(&'static str, f64)>,
+    setup_full_relayout_ms: f64,
+    worst_stage_name: String,
+    worst_stage_us: f64,
+}
+
+impl RealTranscriptScrollReport {
+    fn to_json(&self) -> serde_json::Value {
+        let frames = self.frame_samples.len().max(1);
+        let total_ms = self.frame_samples.iter().sum::<f64>();
+        let stages = self
+            .stage_totals_us
+            .iter()
+            .map(|(name, total_us)| {
+                serde_json::json!({
+                    "name": name,
+                    "mean_us_per_frame": total_us / frames as f64,
+                    "total_ms": total_us / 1000.0,
+                })
+            })
+            .collect::<Vec<_>>();
+        serde_json::json!({
+            "session_id": self.session_id,
+            "title": self.title,
+            "file_bytes": self.file_bytes,
+            "message_count": self.message_count,
+            "total_body_lines": self.total_body_lines,
+            "max_scroll_lines": self.max_scroll_lines,
+            "body_buffer_rebuilds": self.body_buffer_rebuilds,
+            "setup_full_body_relayout_ms": self.setup_full_relayout_ms,
+            "full_scroll_frame": {
+                "frames": self.frame_samples.len(),
+                "mean_ms_per_frame": total_ms / frames as f64,
+                "p50_ms": percentile_ms(&self.frame_samples, 0.50),
+                "p95_ms": percentile_ms(&self.frame_samples, 0.95),
+                "p99_ms": percentile_ms(&self.frame_samples, 0.99),
+                "max_ms": max_sample_ms(&self.frame_samples),
+            },
+            "subphases": stages,
+        })
+    }
+}
+
+/// Build a `SingleSessionApp` backed by a full real transcript, exactly the way
+/// the production resume path hydrates one from disk.
+fn real_transcript_scroll_app(transcript: &session_data::BenchmarkTranscript) -> SingleSessionApp {
+    let mut app = SingleSessionApp::new(None);
+    app.apply_resumed_session_transcript(transcript.messages.clone());
+    app.set_status_label(format!("real transcript: {}", transcript.title));
+    app
+}
+
+fn benchmark_real_transcript_scroll(
+    transcript: &session_data::BenchmarkTranscript,
+    size: PhysicalSize<u32>,
+    frames: usize,
+) -> RealTranscriptScrollReport {
+    let mut app = real_transcript_scroll_app(transcript);
+    let mut font_system = benchmark_font_system();
+
+    // One-time full body wrap (the cost paid when a transcript is first loaded
+    // or the window is resized). After this, scrolling must stay windowed.
+    let setup_started = Instant::now();
+    let body_lines = single_session_rendered_body_lines_for_tick(&app, size, 0);
+    let setup_full_relayout_ms = setup_started.elapsed().as_secs_f64() * 1000.0;
+    let total_body_lines = body_lines.len();
+
+    let max_scroll_lines = single_session_body_scroll_metrics_for_total_lines(
+        &app,
+        size,
+        total_body_lines,
+    )
+    .map(|metrics| metrics.max_scroll_lines)
+    .unwrap_or(0);
+
+    // Prime the sliding text-buffer window at the bottom of the transcript, the
+    // way the app does after hydrating a resumed session.
+    app.scroll_body_to_bottom();
+    let initial_viewport = single_session_body_viewport_from_lines(&app, size, 0.0, &body_lines);
+    let initial_key =
+        single_session_text_key_for_tick_with_rendered_body(&app, size, 0, 0.0, &body_lines);
+    let mut buffers = single_session_text_buffers_from_key(&initial_key, size, &mut font_system);
+    let (mut window_start, mut window_end) =
+        single_session_body_text_window_bounds(&initial_viewport);
+    if let Some(body_buffer) = buffers.get_mut(1) {
+        *body_buffer = single_session_body_text_buffer_from_lines(
+            &mut font_system,
+            &body_lines[window_start..window_end],
+            size,
+            app.text_scale(),
+        );
+        body_buffer.set_scroll(
+            initial_viewport
+                .start_line
+                .saturating_sub(window_start)
+                .min(i32::MAX as usize) as i32,
+        );
+    }
+    let mut last_scroll_start = initial_viewport.start_line;
+
+    // Drive a long scroll sweep from bottom to top and back, one whole line per
+    // frame, so every frame crosses a new line boundary (the worst realistic
+    // continuous-scroll case).
+    let span = max_scroll_lines.max(1);
+    let mut viewport_us = 0.0;
+    let mut window_rebuild_us = 0.0;
+    let mut scroll_us = 0.0;
+    let mut glyph_us = 0.0;
+    let mut areas_us = 0.0;
+    let mut vertices_us = 0.0;
+    let mut body_buffer_rebuilds = 0usize;
+
+    let (frame_samples, _checksum) = benchmark_frame_samples(frames, |frame| {
+        // Triangle-wave scroll position covering the full transcript height.
+        let phase = frame % (span * 2);
+        let target = if phase <= span { phase } else { span * 2 - phase };
+        app.body_scroll_lines = target as f32;
+        let tick = frame as u64;
+
+        let phase_started = Instant::now();
+        let viewport = single_session_body_viewport_from_lines(&app, size, 0.0, &body_lines);
+        viewport_us += phase_started.elapsed().as_secs_f64() * 1_000_000.0;
+
+        let phase_started = Instant::now();
+        if !single_session_body_text_window_contains(window_start, window_end, &viewport) {
+            (window_start, window_end) = single_session_body_text_window_bounds(&viewport);
+            if let Some(body_buffer) = buffers.get_mut(1) {
+                *body_buffer = single_session_body_text_buffer_from_lines(
+                    &mut font_system,
+                    &body_lines[window_start..window_end],
+                    size,
+                    app.text_scale(),
+                );
+            }
+            body_buffer_rebuilds += 1;
+            last_scroll_start = usize::MAX;
+        }
+        window_rebuild_us += phase_started.elapsed().as_secs_f64() * 1_000_000.0;
+
+        let phase_started = Instant::now();
+        if viewport.start_line != last_scroll_start {
+            if let Some(body_buffer) = buffers.get_mut(1) {
+                body_buffer.set_scroll(
+                    viewport
+                        .start_line
+                        .saturating_sub(window_start)
+                        .min(i32::MAX as usize) as i32,
+                );
+            }
+            last_scroll_start = viewport.start_line;
+        }
+        scroll_us += phase_started.elapsed().as_secs_f64() * 1_000_000.0;
+
+        let phase_started = Instant::now();
+        let glyph_checksum = buffers
+            .get(1)
+            .map(|body_buffer| {
+                body_buffer
+                    .layout_runs()
+                    .map(|run| run.glyphs.len())
+                    .sum::<usize>()
+            })
+            .unwrap_or_default();
+        glyph_us += phase_started.elapsed().as_secs_f64() * 1_000_000.0;
+
+        let phase_started = Instant::now();
+        let areas = single_session_text_areas_for_app_with_cached_body_viewport(
+            &app, &buffers, size, 0.0, viewport,
+        );
+        areas_us += phase_started.elapsed().as_secs_f64() * 1_000_000.0;
+
+        let phase_started = Instant::now();
+        let vertices = build_single_session_vertices_with_cached_body(
+            &app, size, 0.0, tick, 0.0, 1.0, &body_lines,
+        );
+        vertices_us += phase_started.elapsed().as_secs_f64() * 1_000_000.0;
+
+        buffers.len() ^ areas.len() ^ vertices.len() ^ glyph_checksum
+    });
+
+    let stage_totals_us = vec![
+        ("viewport_extract", viewport_us),
+        ("body_window_rebuild", window_rebuild_us),
+        ("body_scroll_set", scroll_us),
+        ("glyph_layout_count", glyph_us),
+        ("text_areas", areas_us),
+        ("primitive_vertices", vertices_us),
+    ];
+    let frames_f = frames.max(1) as f64;
+    let (worst_stage_name, worst_stage_us) = stage_totals_us
+        .iter()
+        .map(|(name, total)| (name.to_string(), total / frames_f))
+        .fold((String::new(), 0.0_f64), |acc, candidate| {
+            if candidate.1 > acc.1 { candidate } else { acc }
+        });
+
+    RealTranscriptScrollReport {
+        session_id: transcript.session_id.clone(),
+        title: transcript.title.clone(),
+        file_bytes: transcript.file_bytes,
+        message_count: transcript.messages.len(),
+        total_body_lines,
+        max_scroll_lines,
+        body_buffer_rebuilds,
+        frame_samples,
+        stage_totals_us,
+        setup_full_relayout_ms,
+        worst_stage_name,
+        worst_stage_us,
+    }
 }
 
 fn run_stream_e2e_benchmark(raw_events: usize) -> Result<()> {
