@@ -369,18 +369,18 @@ pub(in crate::tui::app) fn handle_server_event(
                 app.streaming_cache_creation_tokens = cache_creation_input;
             }
             if app.record_completed_stream_cache_usage() {
-                app.total_input_tokens = app.total_input_tokens.saturating_add(input);
-                app.total_output_tokens = app.total_output_tokens.saturating_add(output);
+                app.token_accounting.total_input_tokens = app.token_accounting.total_input_tokens.saturating_add(input);
+                app.token_accounting.total_output_tokens = app.token_accounting.total_output_tokens.saturating_add(output);
                 app.last_api_completed = Some(Instant::now());
                 app.last_api_completed_provider = Some(<App as TuiState>::provider_name(app));
                 app.last_api_completed_model = Some(<App as TuiState>::provider_model(app));
                 app.last_turn_input_tokens = (input > 0).then_some(input);
             } else if was_recorded && app.current_api_usage_recorded {
-                app.total_input_tokens = app
-                    .total_input_tokens
+                app.token_accounting.total_input_tokens = app
+                    .token_accounting.total_input_tokens
                     .saturating_add(input.saturating_sub(previous_input));
-                app.total_output_tokens = app
-                    .total_output_tokens
+                app.token_accounting.total_output_tokens = app
+                    .token_accounting.total_output_tokens
                     .saturating_add(output.saturating_sub(previous_output));
 
                 let had_cache_telemetry =
@@ -393,23 +393,23 @@ pub(in crate::tui::app) fn handle_server_event(
                     } else {
                         input
                     };
-                    app.total_cache_reported_input_tokens = app
-                        .total_cache_reported_input_tokens
+                    app.token_accounting.total_cache_reported_input_tokens = app
+                        .token_accounting.total_cache_reported_input_tokens
                         .saturating_add(reported_delta);
-                    app.total_cache_read_tokens = app.total_cache_read_tokens.saturating_add(
+                    app.token_accounting.total_cache_read_tokens = app.token_accounting.total_cache_read_tokens.saturating_add(
                         app.streaming_cache_read_tokens
                             .unwrap_or(0)
                             .saturating_sub(previous_cache_read.unwrap_or(0)),
                     );
-                    app.total_cache_creation_tokens =
-                        app.total_cache_creation_tokens.saturating_add(
+                    app.token_accounting.total_cache_creation_tokens =
+                        app.token_accounting.total_cache_creation_tokens.saturating_add(
                             app.streaming_cache_creation_tokens
                                 .unwrap_or(0)
                                 .saturating_sub(previous_cache_creation.unwrap_or(0)),
                         );
-                    app.last_cache_reported_input_tokens = Some(input);
-                    app.last_cache_read_tokens = Some(app.streaming_cache_read_tokens.unwrap_or(0));
-                    app.last_cache_creation_tokens =
+                    app.token_accounting.last_cache_reported_input_tokens = Some(input);
+                    app.token_accounting.last_cache_read_tokens = Some(app.streaming_cache_read_tokens.unwrap_or(0));
+                    app.token_accounting.last_cache_creation_tokens =
                         Some(app.streaming_cache_creation_tokens.unwrap_or(0));
                 }
 
@@ -417,7 +417,7 @@ pub(in crate::tui::app) fn handle_server_event(
                     baseline.input_tokens = input;
                     baseline.completed_at = Instant::now();
                 }
-                app.cache_next_optimal_input_tokens =
+                app.token_accounting.cache_next_optimal_input_tokens =
                     Some(crate::tui::info_widget::effective_prompt_tokens(
                         input,
                         app.streaming_cache_read_tokens.unwrap_or(0),
@@ -953,15 +953,15 @@ pub(in crate::tui::app) fn handle_server_event(
                 app.streaming_cache_read_tokens = None;
                 app.streaming_cache_creation_tokens = None;
                 app.current_api_usage_recorded = false;
-                app.total_cache_reported_input_tokens = 0;
-                app.total_cache_read_tokens = 0;
-                app.total_cache_creation_tokens = 0;
-                app.total_cache_optimal_input_tokens = 0;
-                app.last_cache_reported_input_tokens = None;
-                app.last_cache_read_tokens = None;
-                app.last_cache_creation_tokens = None;
-                app.last_cache_optimal_input_tokens = None;
-                app.cache_next_optimal_input_tokens = None;
+                app.token_accounting.total_cache_reported_input_tokens = 0;
+                app.token_accounting.total_cache_read_tokens = 0;
+                app.token_accounting.total_cache_creation_tokens = 0;
+                app.token_accounting.total_cache_optimal_input_tokens = 0;
+                app.token_accounting.last_cache_reported_input_tokens = None;
+                app.token_accounting.last_cache_read_tokens = None;
+                app.token_accounting.last_cache_creation_tokens = None;
+                app.token_accounting.last_cache_optimal_input_tokens = None;
+                app.token_accounting.cache_next_optimal_input_tokens = None;
                 app.kv_cache_baseline = None;
                 app.pending_kv_cache_request = None;
                 app.kv_cache_turn_number = None;
@@ -1044,12 +1044,12 @@ pub(in crate::tui::app) fn handle_server_event(
                 app.remote_token_usage_totals = token_usage_totals;
             }
             if token_usage_totals.is_some() {
-                app.total_input_tokens = 0;
-                app.total_output_tokens = 0;
-                app.total_cache_reported_input_tokens = 0;
-                app.total_cache_read_tokens = 0;
-                app.total_cache_creation_tokens = 0;
-                app.total_cache_optimal_input_tokens = 0;
+                app.token_accounting.total_input_tokens = 0;
+                app.token_accounting.total_output_tokens = 0;
+                app.token_accounting.total_cache_reported_input_tokens = 0;
+                app.token_accounting.total_cache_read_tokens = 0;
+                app.token_accounting.total_cache_creation_tokens = 0;
+                app.token_accounting.total_cache_optimal_input_tokens = 0;
             }
             if let Some(totals) = token_usage_totals {
                 crate::logging::info(&format!(
