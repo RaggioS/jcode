@@ -1,10 +1,9 @@
 use super::{
-    SharedContext, SwarmEvent, SwarmEventType, SwarmMember, fanout_session_event,
-    record_swarm_event,
+    FileTouchService, SharedContext, SwarmEvent, SwarmEventType, SwarmMember,
+    fanout_session_event, record_swarm_event,
 };
 use crate::protocol::{AgentInfo, ContextEntry, NotificationType, ServerEvent};
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{RwLock, broadcast, mpsc};
@@ -193,7 +192,7 @@ pub(super) async fn handle_comm_list(
     client_event_tx: &mpsc::UnboundedSender<ServerEvent>,
     swarm_members: &Arc<RwLock<HashMap<String, SwarmMember>>>,
     swarms_by_id: &Arc<RwLock<HashMap<String, HashSet<String>>>>,
-    files_touched_by_session: &Arc<RwLock<HashMap<String, HashSet<PathBuf>>>>,
+    file_touch: &FileTouchService,
 ) {
     let swarm_id = swarm_id_for_session(&req_session_id, swarm_members).await;
 
@@ -207,7 +206,7 @@ pub(super) async fn handle_comm_list(
         };
 
         let members = swarm_members.read().await;
-        let touches = files_touched_by_session.read().await;
+        let touches = file_touch.reverse_snapshot().await;
 
         let member_list: Vec<AgentInfo> = swarm_session_ids
             .iter()
