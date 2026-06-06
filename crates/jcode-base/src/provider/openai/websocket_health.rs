@@ -35,11 +35,28 @@ impl WebsocketFallbackReason {
 }
 
 pub(super) fn is_websocket_fallback_notice(data: &str) -> bool {
+    // The proxy injects the fallback notice as a plain-text control frame, not
+    // a structured Responses API event. A legitimate `response.*`/`error`
+    // event can legitimately *contain* this phrase (for example inside
+    // tool-call arguments when the model is editing source that mentions
+    // websocket fallback), so a structured event must never be reinterpreted
+    // as a transport control frame.
+    if is_structured_response_event(data) {
+        return false;
+    }
     data.to_lowercase().contains(WEBSOCKET_FALLBACK_NOTICE)
 }
 
 pub(super) fn is_stream_activity_event(_event: &StreamEvent) -> bool {
     true
+}
+
+/// Returns true when `data` parses as a structured Responses API stream event
+/// (a JSON object whose `type` is a `response.*` event or a top-level `error`).
+/// These frames carry model output and must be parsed as protocol events even
+/// if their content happens to contain transport-control phrases.
+pub(super) fn is_structured_response_event(data: &str) -> bool {
+    is_websocket_activity_payload(data)
 }
 
 pub(super) fn is_websocket_activity_payload(data: &str) -> bool {

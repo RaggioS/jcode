@@ -1,6 +1,6 @@
 use super::{
     FALLBACK_TOOL_CALL_COUNTER, NORMALIZED_NULL_TOOL_ARGUMENTS, RECOVERED_TEXT_WRAPPED_TOOL_CALLS,
-    extract_error_with_retry, is_websocket_fallback_notice,
+    extract_error_with_retry, is_structured_response_event, is_websocket_fallback_notice,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 
@@ -223,6 +223,7 @@ pub(super) fn parse_openai_response_event(
     if data
         .to_lowercase()
         .contains("stream disconnected before completion")
+        && !is_structured_response_event(data)
     {
         return Some(StreamEvent::Error {
             message: data.to_string(),
@@ -815,5 +816,94 @@ mod tests {
         assert!(streaming_tool_calls.is_empty());
         assert!(completed_tool_items.is_empty());
         assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn response_completed_emits_message_end_even_when_payload_mentions_fallback() {
+        // Regression: when the model edits source that mentions the websocket
+        // fallback phrase, that text rides along inside structured events. A
+        // `response.completed` frame containing the phrase must still produce a
+        // MessageEnd, otherwise the stream "ends before the completion marker".
+        let mut saw_text_delta = false;
+        let mut streaming_tool_calls = HashMap::new();
+        let mut completed_tool_items = HashSet::new();
+        let mut pending = VecDeque::new();
+
+        let payload = serde_json::json!({
+            "type": "response.completed",
+            "response": {
+                "status": "completed",
+                "output": [{
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{
+                        "type": "output_text",
+                        "text": "falling back from websockets to https transport"
+                    }]
+                }]
+            }
+        })
+        .to_string();
+
+        let event = parse_openai_response_event(
+            &payload,
+            &mut saw_text_delta,
+            &mut streaming_tool_calls,
+            &mut completed_tool_items,
+            &mut pending,
+        );
+
+        assert!(
+            matches!(event, Some(StreamEvent::MessageEnd { .. })),
+            "expected MessageEnd, got {event:?}"
+        );
+    }
+
+    #[test]
+    fn function_call_arguments_with_fallback_phrase_still_emit_tool_call() {
+        let mut saw_text_delta = false;
+        let mut streaming_tool_calls = HashMap::new();
+        let mut completed_tool_items = HashSet::new();
+        let mut pending = VecDeque::new();
+
+        let payload = serde_json::json!({
+            "type": "response.function_call_arguments.done",
+            "item_id": "fc_1",
+            "call_id": "call_1",
+            "name": "bash",
+            "arguments": "{\"command\":\"echo falling back from websockets to https transport\"}"
+        })
+        .to_string();
+
+        let event = parse_openai_response_event(
+            &payload,
+            &mut saw_text_delta,
+            &mut streaming_tool_calls,
+            &mut completed_tool_items,
+            &mut pending,
+        );
+
+        assert!(
+            matches!(event, Some(StreamEvent::ToolUseStart { .. })),
+            "expected ToolUseStart, got {event:?}"
+        );
+    }
+
+    #[test]
+    fn plain_text_fallback_notice_is_still_dropped() {
+        let mut saw_text_delta = false;
+        let mut streaming_tool_calls = HashMap::new();
+        let mut completed_tool_items = HashSet::new();
+        let mut pending = VecDeque::new();
+
+        let event = parse_openai_response_event(
+            "falling back from websockets to https transport",
+            &mut saw_text_delta,
+            &mut streaming_tool_calls,
+            &mut completed_tool_items,
+            &mut pending,
+        );
+
+        assert!(event.is_none());
     }
 }
