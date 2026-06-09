@@ -69,9 +69,8 @@ pub fn notify(text: &str, title: Option<&str>) -> Result<ToolOutput> {
 pub fn wait_for(app: &str, contains: &str, timeout_ms: u64) -> Result<ToolOutput> {
     let total = Duration::from_millis(timeout_ms.min(60_000));
     let deadline = Instant::now() + total;
-    // Keep each poll shallow so it returns quickly even on big apps; a deep
-    // (depth-10) dump of a large tree can itself take many seconds, which would
-    // blow past `timeout_ms`. Depth 6 captures visible labels/values cheaply.
+    // Keep each poll bounded by the per-poll timeout below so it returns even on
+    // big apps. Depth 8 captures most visible labels/values while staying cheap.
     let script = format!(
         r#"
 using terms from application "System Events"
@@ -85,6 +84,9 @@ using terms from application "System Events"
             set out to out & (value of el as text) & " "
         end try
         try
+            set out to out & (description of el as text) & " "
+        end try
+        try
             repeat with child in (UI elements of el)
                 set out to out & (my dumpEl(child, lvl + 1, maxlvl))
             end repeat
@@ -95,7 +97,7 @@ end using terms from
 tell application "System Events"
     set frontApp to first application process whose name is {app}
     try
-        return my dumpEl(front window of frontApp, 0, 6)
+        return my dumpEl(front window of frontApp, 0, 8)
     on error
         return ""
     end try
