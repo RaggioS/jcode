@@ -329,6 +329,16 @@ impl BuildRequest {
             BackgroundTaskStatus::Running => {
                 if task_status.detached || background::global().is_live_task(task_id) {
                     Ok(true)
+                } else if self.within_bootstrap_grace() {
+                    // The status file is written and the build future spawned
+                    // *before* the task is registered in the in-process task
+                    // map. The freshly spawned build task can reach this check
+                    // (via wait_for_turn) ahead of that registration, and
+                    // is_live_task also returns false while the map's write
+                    // lock is held. Without this grace the request marks
+                    // itself stale and the build fails with "queued build
+                    // request disappeared".
+                    Ok(true)
                 } else {
                     self.mark_stale(
                         "Background task is no longer live; pruning stale self-dev build request.",
