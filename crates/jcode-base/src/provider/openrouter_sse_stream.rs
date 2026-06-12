@@ -41,8 +41,9 @@ pub(super) async fn run_stream_with_retries(
 
     for attempt in 0..MAX_RETRIES {
         if attempt > 0 {
-            let delay = RETRY_BASE_DELAY_MS * (1 << (attempt - 1));
-            tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+            let delay =
+                crate::provider::attempt_tracker::retry_backoff_delay(attempt, RETRY_BASE_DELAY_MS);
+            tokio::time::sleep(delay).await;
             crate::logging::info(&format!(
                 "Retrying API request using {} (attempt {}/{})",
                 auth.label(),
@@ -60,25 +61,51 @@ pub(super) async fn run_stream_with_retries(
             auth.label()
         ));
 
+        // Track whether this attempt streams replay-visible output so a
+        // mid-stream transport fault can roll the partial output back on the
+        // consumer before the retry replays the response from the top.
+        let (attempt_tx, attempt_guard) =
+            crate::provider::attempt_tracker::track_attempt_output(tx.clone());
+
         match stream_response(
             client.clone(),
             api_base.clone(),
             auth.clone(),
             send_openrouter_headers,
             request.clone(),
-            tx.clone(),
+            attempt_tx,
             Arc::clone(&provider_pin),
             model.clone(),
         )
         .await
         {
-            Ok(()) => return,
+            Ok(()) => {
+                let _ = attempt_guard.finish().await;
+                return;
+            }
             Err(e) => {
+                let saw_output = attempt_guard.finish().await;
                 // Full anyhow chain ({:#}) so a `.context(...)`-wrapped transport
                 // cause (e.g. TLS BadRecordMac) is visible to the classifier.
                 let error_str = format!("{e:#}").to_lowercase();
                 if is_retryable_error(&error_str) && attempt + 1 < MAX_RETRIES {
-                    crate::logging::info(&format!("Transient API error, will retry: {}", e));
+                    if saw_output {
+                        // Partial output already reached the consumer; tell it
+                        // to discard the partial attempt so the retried
+                        // response replays cleanly instead of duplicating.
+                        crate::logging::warn(&format!(
+                            "Transient API error after partial output; rolling back partial attempt and retrying: {}",
+                            e
+                        ));
+                        let _ = tx
+                            .send(Ok(StreamEvent::RetryRollback {
+                                attempt: attempt + 2,
+                                max: MAX_RETRIES,
+                            }))
+                            .await;
+                    } else {
+                        crate::logging::info(&format!("Transient API error, will retry: {}", e));
+                    }
                     last_error = Some(e);
                     continue;
                 }

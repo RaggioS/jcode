@@ -191,14 +191,21 @@ impl Provider for OpenAIProvider {
             let stream_task = async move {
                 // Attempt persistent WebSocket continuation first
                 if use_websocket_transport {
+                    // Track output: a continuation that streams partial output
+                    // and then fails falls through to a fresh-connection replay
+                    // from the top, which must roll the partial output back.
+                    let (attempt_tx, attempt_guard) =
+                        crate::provider::attempt_tracker::track_attempt_output(tx.clone());
                     let continuation_result = try_persistent_ws_continuation(
                         &persistent_ws,
                         &request,
                         &input,
                         input_item_count,
-                        &tx,
+                        &attempt_tx,
                     )
                     .await;
+                    drop(attempt_tx);
+                    let saw_output = attempt_guard.finish().await;
 
                     match continuation_result {
                         PersistentWsResult::Success => {
@@ -245,6 +252,18 @@ impl Provider for OpenAIProvider {
                                 "Persistent WS continuation failed: {}; using fresh connection",
                                 err
                             ));
+                            if saw_output {
+                                // The failed continuation already streamed
+                                // partial output; the fresh connection below
+                                // replays the response from the top, so roll
+                                // the partial output back on the consumer.
+                                let _ = tx
+                                    .send(Ok(StreamEvent::RetryRollback {
+                                        attempt: 1,
+                                        max: MAX_RETRIES,
+                                    }))
+                                    .await;
+                            }
                             let mut guard = persistent_ws.lock().await;
                             *guard = None;
                             log_openai_stream_lifecycle(
@@ -276,8 +295,11 @@ impl Provider for OpenAIProvider {
                         .await;
                     }
                     if attempt > 0 && !skip_backoff_once {
-                        let delay = RETRY_BASE_DELAY_MS * (1 << (attempt - 1));
-                        tokio::time::sleep(Duration::from_millis(delay)).await;
+                        let delay = crate::provider::attempt_tracker::retry_backoff_delay(
+                            attempt,
+                            RETRY_BASE_DELAY_MS,
+                        );
+                        tokio::time::sleep(delay).await;
                         crate::logging::info(&format!(
                             "Retrying OpenAI API request (attempt {}/{})",
                             attempt + 1,
@@ -346,11 +368,17 @@ impl Provider for OpenAIProvider {
                     ));
 
                     let use_websocket = matches!(transport, OpenAITransport::WebSocket);
+                    // Track whether this attempt streams replay-visible output
+                    // so a mid-stream transport fault can roll the partial
+                    // output back on the consumer before the retry (or HTTPS
+                    // fallback) replays the response from the top.
+                    let (attempt_tx, attempt_guard) =
+                        crate::provider::attempt_tracker::track_attempt_output(tx.clone());
                     let result = if use_websocket {
                         stream_response_websocket_persistent(
                             Arc::clone(&credentials),
                             request.clone(),
-                            tx.clone(),
+                            attempt_tx,
                             Arc::clone(&persistent_ws),
                             input_item_count,
                         )
@@ -378,10 +406,11 @@ impl Provider for OpenAIProvider {
                             } else {
                                 "https".to_string()
                             },
-                            tx.clone(),
+                            attempt_tx,
                         )
                         .await
                     };
+                    let saw_output = attempt_guard.finish().await;
 
                     match result {
                         Ok(()) => {
@@ -430,6 +459,18 @@ impl Provider for OpenAIProvider {
                                 elapsed_ms, error
                             ));
                             emit_status_detail(&tx, format!("https fallback: {}", reason)).await;
+                            if saw_output {
+                                // Partial output already reached the consumer
+                                // before the websocket fault; roll it back so
+                                // the HTTPS replay renders cleanly instead of
+                                // duplicating.
+                                let _ = tx
+                                    .send(Ok(StreamEvent::RetryRollback {
+                                        attempt: attempt + 2,
+                                        max: MAX_RETRIES,
+                                    }))
+                                    .await;
+                            }
                             force_https_for_request = true;
                             skip_backoff_once = true;
                             if matches!(transport_mode, OpenAITransportMode::Auto) {
@@ -473,6 +514,18 @@ impl Provider for OpenAIProvider {
                             // visible to the retry classifier.
                             let error_str = format!("{error:#}").to_lowercase();
                             if is_retryable_error(&error_str) && attempt + 1 < MAX_RETRIES {
+                                if saw_output {
+                                    // Partial output already reached the
+                                    // consumer; roll it back so the retried
+                                    // response replays cleanly instead of
+                                    // duplicating.
+                                    let _ = tx
+                                        .send(Ok(StreamEvent::RetryRollback {
+                                            attempt: attempt + 2,
+                                            max: MAX_RETRIES,
+                                        }))
+                                        .await;
+                                }
                                 log_openai_stream_lifecycle(
                                     crate::logging::LogLevel::Warn,
                                     "retry_scheduled",
