@@ -1977,8 +1977,10 @@ fn observed_pin_yields_to_explicit_user_routing_order() {
     // If the user explicitly narrowed routing themselves (base order set),
     // their configured order wins over the auto-observed session pin.
     let model = "anthropic/claude-sonnet-4.6";
-    let mut base = ProviderRouting::default();
-    base.order = Some(vec!["fireworks".to_string()]);
+    let base = ProviderRouting {
+        order: Some(vec!["fireworks".to_string()]),
+        ..Default::default()
+    };
     let provider = OpenRouterProvider {
         model: Arc::new(RwLock::new(model.to_string())),
         provider_routing: Arc::new(RwLock::new(base)),

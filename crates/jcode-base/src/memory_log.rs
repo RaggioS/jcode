@@ -400,7 +400,6 @@ fn cleanup_old_memory_logs_in(dir: &std::path::Path, now: chrono::DateTime<Local
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write as _;
     use std::time::{Duration, SystemTime};
 
     #[test]

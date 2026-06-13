@@ -1,5 +1,4 @@
 use anyhow::{Context, ensure};
-use serde::Deserialize;
 
 use crate::auth::lifecycle::{
     AuthActivationRequest, AuthActivationResult, AuthCatalogInvariantReport, activate_auth_change,

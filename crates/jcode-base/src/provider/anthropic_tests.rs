@@ -341,12 +341,7 @@ fn test_anthropic_manual_thinking_budget_for_opus_45() {
 
 #[test]
 fn test_anthropic_thinking_sse_events() {
-    let mut current_tool_use = None;
-    let mut current_thinking_block = false;
-    let mut input_tokens = None;
-    let mut output_tokens = None;
-    let mut cache_read_input_tokens = None;
-    let mut cache_creation_input_tokens = None;
+    let mut state = SseStreamState::default();
 
     let start = SseEvent {
         event_type: "content_block_start".to_string(),
@@ -357,18 +352,9 @@ fn test_anthropic_thinking_sse_events() {
         })
         .to_string(),
     };
-    let events = process_sse_event(
-        &start,
-        &mut current_tool_use,
-        &mut current_thinking_block,
-        &mut input_tokens,
-        &mut output_tokens,
-        &mut cache_read_input_tokens,
-        &mut cache_creation_input_tokens,
-        false,
-    );
+    let events = process_sse_event(&start, &mut state, false);
     assert!(matches!(events.as_slice(), [StreamEvent::ThinkingStart]));
-    assert!(current_thinking_block);
+    assert!(state.current_thinking_block);
 
     let delta = SseEvent {
         event_type: "content_block_delta".to_string(),
@@ -379,16 +365,7 @@ fn test_anthropic_thinking_sse_events() {
         })
         .to_string(),
     };
-    let events = process_sse_event(
-        &delta,
-        &mut current_tool_use,
-        &mut current_thinking_block,
-        &mut input_tokens,
-        &mut output_tokens,
-        &mut cache_read_input_tokens,
-        &mut cache_creation_input_tokens,
-        false,
-    );
+    let events = process_sse_event(&delta, &mut state, false);
     assert!(
         matches!(events.as_slice(), [StreamEvent::ThinkingDelta(text)] if text == "reasoning text")
     );
@@ -402,16 +379,7 @@ fn test_anthropic_thinking_sse_events() {
         })
         .to_string(),
     };
-    let events = process_sse_event(
-        &signature,
-        &mut current_tool_use,
-        &mut current_thinking_block,
-        &mut input_tokens,
-        &mut output_tokens,
-        &mut cache_read_input_tokens,
-        &mut cache_creation_input_tokens,
-        false,
-    );
+    let events = process_sse_event(&signature, &mut state, false);
     assert!(
         matches!(events.as_slice(), [StreamEvent::ThinkingSignatureDelta(sig)] if sig == "signed")
     );
@@ -420,18 +388,9 @@ fn test_anthropic_thinking_sse_events() {
         event_type: "content_block_stop".to_string(),
         data: serde_json::json!({"type": "content_block_stop", "index": 0}).to_string(),
     };
-    let events = process_sse_event(
-        &stop,
-        &mut current_tool_use,
-        &mut current_thinking_block,
-        &mut input_tokens,
-        &mut output_tokens,
-        &mut cache_read_input_tokens,
-        &mut cache_creation_input_tokens,
-        false,
-    );
+    let events = process_sse_event(&stop, &mut state, false);
     assert!(matches!(events.as_slice(), [StreamEvent::ThinkingEnd]));
-    assert!(!current_thinking_block);
+    assert!(!state.current_thinking_block);
 }
 
 #[test]
