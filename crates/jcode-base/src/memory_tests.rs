@@ -684,3 +684,43 @@ fn hybrid_fuse_returns_dense_hits_without_lexical_overlap() {
     assert!(!ranked.is_empty());
     assert_eq!(ranked[0].0.id, near.id, "dense-nearest memory should rank first");
 }
+
+#[test]
+fn hybrid_excludes_superseded_memories() {
+    with_temp_home(|_home| {
+        let manager = MemoryManager::new().with_project_dir("/tmp/jcode-hybrid-supersede");
+
+        // Two memories on the same topic with explicit distinct ids (avoid
+        // same-millisecond id collisions).
+        // Distinct embeddings so the write-time dedup does not merge them.
+        let old = MemoryEntry::new(MemoryCategory::Fact, "The build uses cargo profile dev")
+            .with_embedding(vec![1.0, 0.0]);
+        let new = MemoryEntry::new(MemoryCategory::Fact, "The build uses cargo profile selfdev")
+            .with_embedding(vec![0.0, 1.0]);
+
+        let old_id = manager.remember_project(old).expect("remember old");
+        let new_id = manager.remember_project(new).expect("remember new");
+        assert_ne!(old_id, new_id, "ids must differ");
+
+        // Supersede the old memory.
+        let mut graph = manager.load_project_graph().expect("load");
+        graph.supersede(&new_id, &old_id);
+        manager.save_project_graph(&graph).expect("save");
+
+        let results = manager
+            .find_similar_hybrid("cargo build profile selfdev", &[0.0, 1.0], 10)
+            .expect("hybrid");
+        let ids: Vec<&str> = results.iter().map(|(e, _)| e.id.as_str()).collect();
+
+        assert!(
+            !ids.contains(&old_id.as_str()),
+            "superseded memory must not surface from hybrid retrieval; got {:?}",
+            ids
+        );
+        assert!(
+            ids.contains(&new_id.as_str()),
+            "the superseding memory should still surface; got {:?}",
+            ids
+        );
+    });
+}
