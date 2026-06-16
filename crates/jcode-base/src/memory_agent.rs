@@ -677,10 +677,15 @@ impl MemoryAgent {
             && let Some(sidecar) = self.sidecar.as_ref()
         {
             if should_rerank {
-                let reranked = crate::memory_rerank::rerank_candidates(
+                let agents = &crate::config::config().agents;
+                let votes = agents.memory_rerank_votes.max(1);
+                let min_agree = agents.memory_rerank_min_agree.clamp(1, votes);
+                let reranked = crate::memory_rerank::rerank_candidates_consensus(
                     sidecar,
                     &focused_query,
                     new_candidates,
+                    votes,
+                    min_agree,
                 )
                 .await;
                 let turn = self.session_state(session_id).turn_count;

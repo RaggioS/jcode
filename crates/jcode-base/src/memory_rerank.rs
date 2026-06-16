@@ -143,6 +143,108 @@ pub async fn rerank_candidates(
     rerank_candidates_with_mode(sidecar, focused_query, candidates, RerankMode::Precision).await
 }
 
+/// High-precision CONSENSUS rerank: run `votes` independent precision reranks
+/// concurrently and keep ONLY the memories that at least `min_agree` of them
+/// select. Two independent judges agreeing is what lifts injection precision to
+/// ~1.0 (offline adjudication: single judge ~0.77 precision, 2-of-2 agreement
+/// ~1.0, both with ~100% clean-rate on no-memory turns), at the cost of `votes`
+/// LLM calls per fired turn. Output is ordered by descending agreement, then by
+/// the best (lowest) rank any judge gave, so the most-agreed memories lead.
+///
+/// Robustness: judges that error/timeout simply contribute no votes (a blip
+/// cannot force-inject). If EVERY judge fails to produce a usable response we
+/// fall back to hybrid order (never silently drop all memory on transport loss).
+/// `votes <= 1` degenerates to a single precision rerank.
+pub async fn rerank_candidates_consensus(
+    sidecar: &Sidecar,
+    focused_query: &str,
+    candidates: Vec<(MemoryEntry, f32)>,
+    votes: usize,
+    min_agree: usize,
+) -> Vec<MemoryEntry> {
+    let votes = votes.max(1);
+    let min_agree = min_agree.clamp(1, votes);
+    if votes == 1 {
+        return rerank_candidates_with_mode(
+            sidecar,
+            focused_query,
+            candidates,
+            RerankMode::Precision,
+        )
+        .await;
+    }
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+    if candidates.len() == 1 {
+        // A single candidate: trust hybrid (not worth N calls to vet one item).
+        return candidates.into_iter().map(|(e, _)| e).collect();
+    }
+
+    let pairs: Vec<(String, String)> = candidates
+        .iter()
+        .map(|(e, _)| (e.id.clone(), e.content.clone()))
+        .collect();
+    let prompt = build_rerank_prompt(focused_query, &pairs);
+    let n = candidates.len();
+
+    // Fire `votes` independent reranks concurrently.
+    let futures = (0..votes).map(|_| {
+        let sidecar = sidecar.clone();
+        let prompt = prompt.clone();
+        async move {
+            match sidecar.complete(LLM_RERANK_SYSTEM, &prompt).await {
+                Ok(resp) => extract_ranking(&resp, n), // Some([]) = nothing relevant
+                Err(_) => None,                         // transport error = no vote
+            }
+        }
+    });
+    let ballots: Vec<Option<Vec<usize>>> = futures::future::join_all(futures).await;
+
+    let usable = ballots.iter().filter(|b| b.is_some()).count();
+    if usable == 0 {
+        // Every judge failed (transport). Never drop all memory on a blip.
+        crate::logging::info(
+            "Memory consensus rerank: all judges failed; falling back to hybrid order",
+        );
+        return candidates.into_iter().map(|(e, _)| e).collect();
+    }
+
+    let kept = tally_consensus(&ballots, n, min_agree);
+
+    crate::logging::info(&format!(
+        "Memory consensus rerank: {usable}/{votes} judges, {} of {n} candidates met >={min_agree} agreement",
+        kept.len()
+    ));
+
+    compose_reranked(candidates, &kept, RerankMode::Precision)
+}
+
+/// Pure consensus tally: given per-judge ballots (each an optional best-first
+/// list of candidate indices), the candidate count `n`, and the agreement bar
+/// `min_agree`, return the kept candidate indices ordered by votes descending
+/// then by best (lowest) rank any judge assigned. `None` ballots (failed judges)
+/// contribute no votes. Factored out so it is unit-testable without a `Sidecar`.
+fn tally_consensus(ballots: &[Option<Vec<usize>>], n: usize, min_agree: usize) -> Vec<usize> {
+    let mut vote_count = vec![0usize; n];
+    let mut best_rank = vec![usize::MAX; n];
+    for ballot in ballots.iter().flatten() {
+        for (rank, &idx) in ballot.iter().enumerate() {
+            if idx < n {
+                vote_count[idx] += 1;
+                best_rank[idx] = best_rank[idx].min(rank);
+            }
+        }
+    }
+    let mut kept: Vec<usize> = (0..n).filter(|&i| vote_count[i] >= min_agree).collect();
+    kept.sort_by(|&a, &b| {
+        vote_count[b]
+            .cmp(&vote_count[a])
+            .then(best_rank[a].cmp(&best_rank[b]))
+    });
+    kept
+}
+
 /// Rerank `candidates` with a listwise LLM call, choosing precision vs recall.
 ///
 /// In [`RerankMode::Precision`] returns only the model-kept relevant memories in
@@ -325,5 +427,46 @@ mod tests {
         assert!(p.contains("CURRENT REQUEST:\nfix the scroll bug"));
         assert!(p.contains("1. first memory"));
         assert!(p.contains("2. second memory"));
+    }
+
+    #[test]
+    fn tally_consensus_requires_agreement() {
+        // Two judges. Candidate 0 picked by both, 1 by one, 2 by neither.
+        let ballots = vec![Some(vec![0, 1]), Some(vec![0])];
+        // min_agree=2: only candidate 0 survives.
+        assert_eq!(tally_consensus(&ballots, 3, 2), vec![0]);
+        // min_agree=1: 0 and 1 survive (0 first: more votes).
+        assert_eq!(tally_consensus(&ballots, 3, 1), vec![0, 1]);
+    }
+
+    #[test]
+    fn tally_consensus_orders_by_votes_then_rank() {
+        // 3 judges. c2 gets 3 votes, c0 gets 2, c1 gets 2 but ranked worse.
+        let ballots = vec![
+            Some(vec![2, 0, 1]),
+            Some(vec![2, 0]),
+            Some(vec![2, 1]),
+        ];
+        // votes: c2=3, c0=2, c1=2. c0 ranked above c1 (best_rank 1 vs 1? c0 best
+        // rank 1, c1 best rank 1 too) -> stable by index. Top should be c2.
+        let kept = tally_consensus(&ballots, 3, 2);
+        assert_eq!(kept[0], 2, "unanimous candidate leads");
+        assert!(kept.contains(&0) && kept.contains(&1));
+    }
+
+    #[test]
+    fn tally_consensus_ignores_failed_ballots() {
+        // One real judge + one failed (None). min_agree=1 still works off the
+        // single usable ballot; a failed judge contributes no votes.
+        let ballots = vec![Some(vec![1, 0]), None];
+        assert_eq!(tally_consensus(&ballots, 2, 1), vec![1, 0]);
+        // min_agree=2 with only one usable judge -> nothing meets the bar.
+        assert!(tally_consensus(&ballots, 2, 2).is_empty());
+    }
+
+    #[test]
+    fn tally_consensus_empty_when_no_votes() {
+        let ballots = vec![Some(vec![]), Some(vec![])];
+        assert!(tally_consensus(&ballots, 3, 1).is_empty());
     }
 }
