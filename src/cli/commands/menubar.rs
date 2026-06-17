@@ -276,7 +276,7 @@ mod macos {
             });
         if let Some(button) = status_item.button(mtm) {
             let icon = NSImage::imageWithSystemSymbolName_accessibilityDescription(
-                ns_string!("terminal"),
+                ns_string!("terminal.fill"),
                 Some(ns_string!("jcode sessions")),
             );
             if let Some(icon) = icon.as_deref() {
