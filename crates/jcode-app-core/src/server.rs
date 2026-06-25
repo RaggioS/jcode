@@ -358,7 +358,7 @@ pub use self::util::ServerIdentity;
 pub(crate) use self::util::server_has_newer_binary;
 use self::util::{
     debug_control_allowed, embedding_idle_unload_secs, git_common_dir_for, reload_exec_target,
-    startup_headless_recovery_test_delay, swarm_id_for_dir,
+    server_idle_timeout_secs, startup_headless_recovery_test_delay, swarm_id_for_dir,
 };
 
 mod file_activity;
@@ -378,9 +378,6 @@ mod queue_tests;
 
 #[cfg(test)]
 mod file_activity_tests;
-
-/// Idle timeout for the shared server when no clients are connected (5 minutes)
-const IDLE_TIMEOUT_SECS: u64 = 300;
 
 /// How often to check whether the embedding model can be unloaded.
 const EMBEDDING_IDLE_CHECK_SECS: u64 = 30;
@@ -1423,6 +1420,7 @@ impl Server {
             tokio::spawn(async move {
                 let mut idle_since: Option<std::time::Instant> = None;
                 let mut check_interval = tokio::time::interval(std::time::Duration::from_secs(10));
+                let idle_timeout_secs = server_idle_timeout_secs();
 
                 loop {
                     check_interval.tick().await;
@@ -1435,13 +1433,13 @@ impl Server {
                             idle_since = Some(std::time::Instant::now());
                             crate::logging::info(&format!(
                                 "No clients connected. Server will exit after {} minutes of idle.",
-                                IDLE_TIMEOUT_SECS / 60
+                                idle_timeout_secs / 60
                             ));
                         }
 
                         if let Some(since) = idle_since {
                             let idle_duration = since.elapsed().as_secs();
-                            if idle_duration >= IDLE_TIMEOUT_SECS {
+                            if idle_duration >= idle_timeout_secs {
                                 crate::logging::info(&format!(
                                     "Server idle for {} minutes with no clients. Shutting down.",
                                     idle_duration / 60
