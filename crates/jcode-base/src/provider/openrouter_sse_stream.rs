@@ -1,6 +1,14 @@
 use super::*;
 use jcode_provider_openrouter::stream::OpenRouterStream;
 
+/// A local OpenAI-compatible endpoint (Ollama / LM Studio) reachable over loopback.
+/// These speak cleartext HTTP/1.1 only; the HTTP/2-tuned cloud client stalls the first
+/// connection to them (see `shared_local_http1_client`).
+fn is_local_endpoint(api_base: &str) -> bool {
+    let lower = api_base.to_ascii_lowercase();
+    lower.contains("localhost") || lower.contains("127.0.0.1") || lower.contains("[::1]")
+}
+
 fn local_endpoint_troubleshooting_hint(api_base: &str, model: &str) -> &'static str {
     let lower = api_base.to_ascii_lowercase();
     if lower.contains("localhost:11434") || lower.contains("127.0.0.1:11434") {
@@ -72,7 +80,11 @@ pub(super) async fn run_stream_with_retries(
         // poisoned other idle pooled connections opened through the same path,
         // so reusing the shared pool can fail identically. A fresh client
         // guarantees a brand-new TCP+TLS connection.
-        let attempt_client = if attempt == 0 {
+        let attempt_client = if is_local_endpoint(&api_base) {
+            // Local Ollama/LM Studio: force pooled HTTP/1.1 — the HTTP/2 keep-alive
+            // cloud client stalls the first connection to loopback for tens of seconds.
+            crate::provider::shared_local_http1_client()
+        } else if attempt == 0 {
             client.clone()
         } else {
             crate::provider::fresh_transport_client()
