@@ -566,8 +566,20 @@ where
 }
 
 pub(super) fn handle_paste(app: &mut App, text: String) {
-    // Note: clipboard_image() is NOT checked here. Bracketed paste events from the
-    // terminal always deliver text. Checking clipboard_image() here caused a bug where
+    // An empty bracketed paste means the terminal delivered no text. This is how
+    // macOS terminals (incl. the VS Code integrated terminal) report Cmd+V when the
+    // clipboard holds an image only — they emit a 0-char paste instead of swallowing
+    // the event. Look for a clipboard image and attach it, matching how every other
+    // terminal agent handles Cmd+V image paste. This is safe ONLY for empty text:
+    // a non-empty paste must never be reinterpreted as an image (the Wayland
+    // multi-MIME false-positive this function originally guarded against).
+    if text.is_empty() {
+        app.set_status_notice("Reading clipboard...");
+        spawn_clipboard_paste(app, ClipboardPasteKind::ImageOnly);
+        return;
+    }
+    // Note: clipboard_image() is NOT checked for non-empty text. Bracketed paste events
+    // from the terminal deliver text. Checking clipboard_image() here caused a bug where
     // text pastes were misidentified as images when the clipboard also had image data
     // (common on Wayland where apps advertise multiple MIME types). Image pasting is
     // handled by explicit clipboard shortcuts instead (Ctrl+V/Alt+V/Cmd+V smart-paste).

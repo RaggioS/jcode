@@ -872,29 +872,29 @@ pub(super) fn clipboard_image() -> Option<(String, String)> {
         }
     }
 
-    // macOS: use osascript to check clipboard for images and save as PNG via temp file
+    // macOS: use osascript (JXA) to check clipboard for images and save as PNG via temp file.
+    // JXA (JavaScript) instead of AppleScript-ObjC: the AppleScript dialect failed to parse on
+    // non-English system locales (e.g. Italian raised -2741 "found plural class name"), so image
+    // paste silently returned nothing. JXA syntax is locale-independent.
     #[cfg(target_os = "macos")]
     {
         let temp_path = std::env::temp_dir().join("jcode_clipboard.png");
-        let script = format!(
-            r#"use framework \"AppKit\"
-            set pb to current application's NSPasteboard's generalPasteboard()
-            set imgClasses to current application's NSArray's arrayWithObject:(current application's NSImage)
-            if (pb's canReadObjectForClasses:imgClasses options:(missing value)) then
-                set imgList to pb's readObjectsForClasses:imgClasses options:(missing value)
-                set img to item 1 of imgList
-                set tiffData to img's TIFFRepresentation()
-                set bitmapRep to current application's NSBitmapImageRep's imageRepWithData:tiffData
-                set pngData to bitmapRep's representationUsingType:(current application's NSBitmapImageFileTypePNG) properties:(missing value)
-                pngData's writeToFile:\"{}\" atomically:true
-                return \"ok\"
-            else
-                return \"none\"
-            end if"#,
-            temp_path.to_string_lossy()
-        );
+        // NSBitmapImageFileTypePNG = 4
+        let script = r#"ObjC.import('AppKit');
+            var pb = $.NSPasteboard.generalPasteboard;
+            var classes = $.NSArray.arrayWithObject($.NSImage);
+            if (pb.canReadObjectForClassesOptions(classes, $())) {
+                var imgs = pb.readObjectsForClassesOptions(classes, $());
+                var img = imgs.objectAtIndex(0);
+                var tiff = img.TIFFRepresentation;
+                var rep = $.NSBitmapImageRep.imageRepWithData(tiff);
+                var png = rep.representationUsingTypeProperties(4, $());
+                png.writeToFileAtomically('__TEMP_PATH__', true);
+                "ok";
+            } else { "none"; }"#
+            .replace("__TEMP_PATH__", &temp_path.to_string_lossy());
         if let Ok(output) = std::process::Command::new("osascript")
-            .args(["-l", "AppleScript", "-e", &script])
+            .args(["-l", "JavaScript", "-e", &script])
             .output()
         {
             let result = String::from_utf8_lossy(&output.stdout).trim().to_string();
