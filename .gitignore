@@ -18,3 +18,6 @@ target-ttest*/
 /*.avif
 /*.mp4
 /*.png
+
+# runtime hook logs (churn, not source)
+logs/*.json
