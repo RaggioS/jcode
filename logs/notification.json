@@ -1,0 +1,10 @@
+[
+  {
+    "session_id": "120ec635-4140-4bf9-8fdc-24047e46c394",
+    "transcript_path": "/Users/raimondospatola/.claude/projects/-Users-raimondospatola-Documents-AI-Projects/120ec635-4140-4bf9-8fdc-24047e46c394.jsonl",
+    "cwd": "/Users/raimondospatola/Documents/AI Projects/jcode",
+    "hook_event_name": "Notification",
+    "message": "Claude is waiting for your input",
+    "notification_type": "idle_prompt"
+  }
+]

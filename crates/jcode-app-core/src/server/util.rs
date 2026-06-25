@@ -36,6 +36,19 @@ pub(crate) fn embedding_idle_unload_secs() -> u64 {
         .unwrap_or(EMBEDDING_IDLE_UNLOAD_DEFAULT_SECS)
 }
 
+/// Idle timeout (seconds) before the shared server exits with no clients connected.
+/// Default 300 (5 min). Raise it (e.g. to match the Ollama keep-alive) so the warm
+/// server — provider pool, MCP pool, loaded embedder, resumable sessions — survives
+/// gaps between client launches instead of re-initializing each time.
+/// Env override: `JCODE_SERVER_IDLE_TIMEOUT_SECS`.
+pub(crate) fn server_idle_timeout_secs() -> u64 {
+    std::env::var("JCODE_SERVER_IDLE_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(300)
+}
+
 pub(crate) async fn get_shared_mcp_pool(
     cell: &OnceCell<Arc<crate::mcp::SharedMcpPool>>,
 ) -> Arc<crate::mcp::SharedMcpPool> {
