@@ -12,5 +12,27 @@
     "last_assistant_message": "Fatto. Tutto su GitHub ora \u00e8 in inglese.\n\n**Tradotto (pocket-llm, PR #16)** \u2014 committato e pushato:\n- `extension.js`: 5 stringhe UI (titolo comando, tooltip, status-bar, messaggi errore/info) \u2192 EN.\n- `package.json`: 2 titoli comando \u2192 \"Launch jcode (Pocket LLM)\" / \"Pocket LLM: stop Ollama server\".\n- `README.md`: prompt d'esempio + nomi comando \u2192 EN.\n\n**Gi\u00e0 EN (verificato)**:\n- jcode fork PR #1: titolo *\"macOS image paste fix (locale-independent) + fork config\"*, body, commit, PATCHES.md, commenti codice (JXA) \u2014 tutti inglese.\n- pocket-llm PR #16: titolo *\"Switch local-gemma4 launcher from Hermes to jcode\"*, body, commit \u2014 inglese.\n- Grep fork: zero residui italiani.\n\n**Una scelta che ti segnalo** (non l'ho cambiata da solo):\n`jcode/AGENTS.md` ha la persona con direttiva *\"Reply in Italian by default\"* \u2014 \u00e8 il **comportamento voluto** dell'agente locale, non prosa di repo. Per un repo pubblico altri utenti otterrebbero risposte italiane. Opzioni:\n- **(a)** Lascio cos\u00ec (\u00e8 la tua config locale, header gi\u00e0 spiega \"Italian persona\").\n- **(b)** La rendo neutra/EN-default come template pubblicabile, e tieni la versione IT solo nel tuo `~/AGENTS.md` locale.\n\nQuale preferisci? E confermi se mergiare le 2 PR (squash) o lasciarle in review.",
     "background_tasks": [],
     "session_crons": []
+  },
+  {
+    "session_id": "120ec635-4140-4bf9-8fdc-24047e46c394",
+    "transcript_path": "/Users/raimondospatola/.claude/projects/-Users-raimondospatola-Documents-AI-Projects/120ec635-4140-4bf9-8fdc-24047e46c394.jsonl",
+    "cwd": "/Users/raimondospatola/Documents/AI Projects/jcode",
+    "permission_mode": "auto",
+    "effort": {
+      "level": "high"
+    },
+    "hook_event_name": "Stop",
+    "stop_hook_active": false,
+    "last_assistant_message": "Build in corso. Root cause trovato e patchato: jcode applicava transport **HTTP/2 keep-alive (cloud)** all'endpoint Ollama locale \u2192 la prima connessione stallava ~58s (3 retry da ~15s) prima del fallback; curl HTTP/1.1 = 2.4s. Fix = **client HTTP/1.1 poolato per endpoint locali** (127.0.0.1/localhost). Aspetto il build, poi installo e verifico che la prima risposta scenda da 58s a ~3s.",
+    "background_tasks": [
+      {
+        "id": "bb2gi492q",
+        "type": "shell",
+        "status": "running",
+        "description": "Branch + build local-http1 fix",
+        "command": "cd \"/Users/raimondospatola/Documents/AI Projects/jcode\" && git checkout -b fix/local-ollama-http1 2>&1 | tail -1 && export PATH=\"/opt/homebrew/bin:$PATH\" && echo \"build $(date +%T)\" && cargo build --release --bin jcode 2>&1 | tail -6; echo \"EXIT=${PIPESTATUS[0]} $(date +%T)\""
+      }
+    ],
+    "session_crons": []
   }
 ]

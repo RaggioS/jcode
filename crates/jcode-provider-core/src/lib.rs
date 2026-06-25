@@ -495,6 +495,33 @@ pub fn shared_http_client() -> reqwest::Client {
         .clone()
 }
 
+/// Pooled HTTP/1.1-only client for LOCAL OpenAI-compatible endpoints (Ollama, LM Studio).
+///
+/// The shared cloud client enables HTTP/2 keep-alive pings, which are meant for remote
+/// providers. A local server such as Ollama only speaks cleartext HTTP/1.1 and does not
+/// support h2c; routing it through the HTTP/2-tuned client makes the FIRST connection
+/// stall for tens of seconds (observed ~58s, three ~15s attempt timeouts) before it
+/// finally falls back, while plain HTTP/1.1 connects in <1ms and answers in ~2s. Forcing
+/// HTTP/1.1 for local endpoints removes that first-request stall. Pooled so repeated turns
+/// reuse the connection.
+pub fn shared_local_http1_client() -> reqwest::Client {
+    use std::sync::OnceLock;
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .user_agent(JCODE_USER_AGENT)
+                .http1_only()
+                .connect_timeout(Duration::from_secs(5))
+                .tcp_keepalive(Some(Duration::from_secs(30)))
+                .pool_idle_timeout(Duration::from_secs(90))
+                .pool_max_idle_per_host(8)
+                .build()
+                .unwrap_or_else(|_| shared_http_client())
+        })
+        .clone()
+}
+
 /// Fresh HTTP client for transport-fault retries.
 ///
 /// Retrying on the shared pooled client can reuse *other* idle connections

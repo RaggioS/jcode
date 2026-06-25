@@ -708,5 +708,360 @@
       "description": "Branch pocket-llm for persistent server env"
     },
     "tool_use_id": "toolu_01SMPjintukLK9BA6JH8oQ7d"
+  },
+  {
+    "session_id": "120ec635-4140-4bf9-8fdc-24047e46c394",
+    "transcript_path": "/Users/raimondospatola/.claude/projects/-Users-raimondospatola-Documents-AI-Projects/120ec635-4140-4bf9-8fdc-24047e46c394.jsonl",
+    "cwd": "/Users/raimondospatola/Documents/AI Projects/jcode",
+    "permission_mode": "auto",
+    "effort": {
+      "level": "high"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Edit",
+    "tool_input": {
+      "file_path": "/Users/raimondospatola/Documents/AI Projects/.claude/reference_jcode.md",
+      "old_string": "- **Phase B (speed, low effort)**: (B1) launcher uses persistent `jcode serve`/`connect` so the warm model +\n  state survive across windows (no re-warm per launch); (B2) confirm **agent-grep** (structure-aware grep,\n  adaptive truncation), **lazy skills** (semantic-hit injection), and **semantic memory** are active \u2192 fewer\n  whole-file reads / re-discovery turns = faster effective turns at full capability.",
+      "new_string": "- **Phase B (speed) \u2014 DONE 2026-06-25**: jcode already auto-spawns a persistent shared server; the lever was\n  its hardcoded 5-min idle shutdown. Fork patch makes it env-configurable `JCODE_SERVER_IDLE_TIMEOUT_SECS`\n  (default 300; jcode PR #2) mirroring `JCODE_EMBEDDING_IDLE_UNLOAD_SECS`. Launcher sets both to 1800 (30m,\n  match `OLLAMA_KEEP_ALIVE`) so provider/MCP pool + loaded embedder + sessions survive window gaps (pocket-llm\n  PR #18). Verified: `jcode serve` process env shows `JCODE_SERVER_IDLE_TIMEOUT_SECS=1800`. agent-grep tool\n  present (`tool/agentgrep.rs`); `[features] memory=true, swarm=true` in live config.\n  - **Follow-up speed bug found (not yet fixed)**: `~/.jcode/mcp.json` has a dead `node_repl` MCP server\n    pointing at a missing `Codex.app/.../node_repl` \u2192 every run waits 5000ms (`cold-cache MCP` timeout) then\n    errors. Removing that stale MCP entry saves ~5s per run. Quick win.",
+      "replace_all": false
+    },
+    "tool_use_id": "toolu_01SNDgeUSCd8gtaxa9aAnnoJ"
+  },
+  {
+    "session_id": "120ec635-4140-4bf9-8fdc-24047e46c394",
+    "transcript_path": "/Users/raimondospatola/.claude/projects/-Users-raimondospatola-Documents-AI-Projects/120ec635-4140-4bf9-8fdc-24047e46c394.jsonl",
+    "cwd": "/Users/raimondospatola/Documents/AI Projects/jcode",
+    "permission_mode": "auto",
+    "effort": {
+      "level": "high"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "cd \"/Users/raimondospatola/Documents/AI Projects\" && git add -A .claude/reference_jcode.md && git commit -q -m \"docs(memory): Phase B done (configurable server idle 30m, PR #2/#18 verified) + dead node_repl MCP 5s-wait finding\" && git push -q origin master 2>&1 | tail -1; echo \"rc=$?\"; echo \"=== inspect mcp.json node_repl ===\"; grep -nA2 \"node_repl\" ~/.jcode/mcp.json 2>&1 | head",
+      "description": "Commit memory + inspect mcp.json"
+    },
+    "tool_use_id": "toolu_015LdXTwTVnzsjAUZ2MzmieG"
+  },
+  {
+    "session_id": "120ec635-4140-4bf9-8fdc-24047e46c394",
+    "transcript_path": "/Users/raimondospatola/.claude/projects/-Users-raimondospatola-Documents-AI-Projects/120ec635-4140-4bf9-8fdc-24047e46c394.jsonl",
+    "cwd": "/Users/raimondospatola/Documents/AI Projects/jcode",
+    "permission_mode": "auto",
+    "effort": {
+      "level": "high"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Read",
+    "tool_input": {
+      "file_path": "/Users/raimondospatola/Documents/AI Projects/jcode/crates/jcode-provider-core/src/lib.rs",
+      "offset": 455,
+      "limit": 70
+    },
+    "tool_use_id": "toolu_011Ar5yTJrTs2UvLnkVXA9zf"
+  },
+  {
+    "session_id": "120ec635-4140-4bf9-8fdc-24047e46c394",
+    "transcript_path": "/Users/raimondospatola/.claude/projects/-Users-raimondospatola-Documents-AI-Projects/120ec635-4140-4bf9-8fdc-24047e46c394.jsonl",
+    "cwd": "/Users/raimondospatola/Documents/AI Projects/jcode",
+    "permission_mode": "auto",
+    "effort": {
+      "level": "high"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "export PATH=\"/opt/homebrew/bin:$PATH\"; echo \"=== curl /v1/chat/completions (HTTP/1.1, warm) x3 ===\"; for i in 1 2 3; do t0=$(date +%s.%N); curl -s --http1.1 http://127.0.0.1:11434/v1/chat/completions -H 'Content-Type: application/json' -H 'Authorization: Bearer ollama' -d '{\"model\":\"gemma4:12b\",\"messages\":[{\"role\":\"user\",\"content\":\"ok\"}],\"stream\":false,\"reasoning_effort\":\"none\",\"temperature\":0.6}' -o /dev/null -w \"http=%{http_code} connect=%{time_connect}s ttfb=%{time_starttransfer}s total=%{time_total}s\\n\" 2>&1; done; echo \"=== curl with --http2 (force) ===\"; t0=$(date +%s.%N); curl -s --http2-prior-knowledge http://127.0.0.1:11434/v1/chat/completions -H 'Content-Type: application/json' -H 'Authorization: Bearer ollama' -d '{\"model\":\"gemma4:12b\",\"messages\":[{\"role\":\"user\",\"content\":\"ok\"}],\"stream\":false}' -o /dev/null -w \"http2: http=%{http_code} total=%{time_total}s\\n\" 2>&1 | tail -1",
+      "timeout": 120000,
+      "description": "Curl Ollama /v1 HTTP1.1 vs HTTP2 timing"
+    },
+    "tool_use_id": "toolu_013XDvtBmwP2rxqj1ooQdUee"
+  },
+  {
+    "session_id": "120ec635-4140-4bf9-8fdc-24047e46c394",
+    "transcript_path": "/Users/raimondospatola/.claude/projects/-Users-raimondospatola-Documents-AI-Projects/120ec635-4140-4bf9-8fdc-24047e46c394.jsonl",
+    "cwd": "/Users/raimondospatola/Documents/AI Projects/jcode",
+    "permission_mode": "auto",
+    "effort": {
+      "level": "high"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "cd \"/Users/raimondospatola/Documents/AI Projects/jcode\" && echo \"=== 'API stream attempt' + 'over HTTPS transport' log site ===\"; grep -rniE \"API stream attempt|over HTTPS transport|connection established in|HTTPS \\(SSE\\)|shared_http_client|fresh_transport_client\" crates/jcode-provider-openrouter/src crates/jcode-provider-core/src src 2>/dev/null | grep -ivE \"test|//|keep_alive\" | head -20",
+      "description": "Locate transport send + http client usage"
+    },
+    "tool_use_id": "toolu_01KgpJU3o7FNzh9T7ew9GgZ1"
+  },
+  {
+    "session_id": "120ec635-4140-4bf9-8fdc-24047e46c394",
+    "transcript_path": "/Users/raimondospatola/.claude/projects/-Users-raimondospatola-Documents-AI-Projects/120ec635-4140-4bf9-8fdc-24047e46c394.jsonl",
+    "cwd": "/Users/raimondospatola/Documents/AI Projects/jcode",
+    "permission_mode": "auto",
+    "effort": {
+      "level": "high"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "cd \"/Users/raimondospatola/Documents/AI Projects/jcode\" && grep -rln \"API stream attempt\" --include=*.rs . 2>/dev/null | grep -v test | head; echo \"---\"; grep -rln \"OpenRouter transport:\" --include=*.rs . 2>/dev/null | grep -v test | head; echo \"=== HTTP version forcing anywhere (http_1/Version::HTTP_11/http1_only) ===\"; grep -rniE \"Version::HTTP_11|http1_only|\\.version\\(|HTTP_2\" --include=*.rs crates src 2>/dev/null | grep -ivE \"test\" | head",
+      "description": "Find API stream attempt + version forcing"
+    },
+    "tool_use_id": "toolu_012KwTUg1WdEXprDuJEKCyLB"
+  },
+  {
+    "session_id": "120ec635-4140-4bf9-8fdc-24047e46c394",
+    "transcript_path": "/Users/raimondospatola/.claude/projects/-Users-raimondospatola-Documents-AI-Projects/120ec635-4140-4bf9-8fdc-24047e46c394.jsonl",
+    "cwd": "/Users/raimondospatola/Documents/AI Projects/jcode",
+    "permission_mode": "auto",
+    "effort": {
+      "level": "high"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "cd \"/Users/raimondospatola/Documents/AI Projects/jcode\" && echo \"=== API stream attempt site ===\"; grep -rln \"API stream attempt\" crates src 2>/dev/null | grep -v test | head; echo \"=== OpenRouter transport: site ===\"; grep -rln \"OpenRouter transport:\" crates src 2>/dev/null | grep -v test | head; echo \"=== version forcing ===\"; grep -rniE \"Version::HTTP_11|http1_only|HTTP_2|\\.version\\(reqwest\" crates src 2>/dev/null | grep -iv test | head",
+      "description": "Find transport site without include glob"
+    },
+    "tool_use_id": "toolu_01NSyQcWByASkemijv7Du91t"
+  },
+  {
+    "session_id": "120ec635-4140-4bf9-8fdc-24047e46c394",
+    "transcript_path": "/Users/raimondospatola/.claude/projects/-Users-raimondospatola-Documents-AI-Projects/120ec635-4140-4bf9-8fdc-24047e46c394.jsonl",
+    "cwd": "/Users/raimondospatola/Documents/AI Projects/jcode",
+    "permission_mode": "auto",
+    "effort": {
+      "level": "high"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "cd \"/Users/raimondospatola/Documents/AI Projects/jcode\" && echo \"=== client + version + attempt log in sse_stream ===\"; grep -nE \"shared_http_client|fresh_transport_client|http1_only|\\.version\\(|API stream attempt|connection established|reqwest::Client|client\\.post|\\.send\\(\\)|endpoint|base_url|localhost|127\\.0\\.0\\.1|is_local|http://\" crates/jcode-base/src/provider/openrouter_sse_stream.rs 2>/dev/null | head -40",
+      "description": "Inspect sse_stream client + send"
+    },
+    "tool_use_id": "toolu_011cLykABwovcb62EDKc1ZXA"
+  },
+  {
+    "session_id": "120ec635-4140-4bf9-8fdc-24047e46c394",
+    "transcript_path": "/Users/raimondospatola/.claude/projects/-Users-raimondospatola-Documents-AI-Projects/120ec635-4140-4bf9-8fdc-24047e46c394.jsonl",
+    "cwd": "/Users/raimondospatola/Documents/AI Projects/jcode",
+    "permission_mode": "auto",
+    "effort": {
+      "level": "high"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Read",
+    "tool_input": {
+      "file_path": "/Users/raimondospatola/Documents/AI Projects/jcode/crates/jcode-base/src/provider/openrouter_sse_stream.rs",
+      "offset": 40,
+      "limit": 55
+    },
+    "tool_use_id": "toolu_018csHiLjzGDL15irSA2zGWe"
+  },
+  {
+    "session_id": "120ec635-4140-4bf9-8fdc-24047e46c394",
+    "transcript_path": "/Users/raimondospatola/.claude/projects/-Users-raimondospatola-Documents-AI-Projects/120ec635-4140-4bf9-8fdc-24047e46c394.jsonl",
+    "cwd": "/Users/raimondospatola/Documents/AI Projects/jcode",
+    "permission_mode": "auto",
+    "effort": {
+      "level": "high"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Read",
+    "tool_input": {
+      "file_path": "/Users/raimondospatola/Documents/AI Projects/jcode/crates/jcode-base/src/provider/openrouter_sse_stream.rs",
+      "offset": 18,
+      "limit": 22
+    },
+    "tool_use_id": "toolu_01KvRNHWEkNggBYrDvB2h8DR"
+  },
+  {
+    "session_id": "120ec635-4140-4bf9-8fdc-24047e46c394",
+    "transcript_path": "/Users/raimondospatola/.claude/projects/-Users-raimondospatola-Documents-AI-Projects/120ec635-4140-4bf9-8fdc-24047e46c394.jsonl",
+    "cwd": "/Users/raimondospatola/Documents/AI Projects/jcode",
+    "permission_mode": "auto",
+    "effort": {
+      "level": "high"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Edit",
+    "tool_input": {
+      "file_path": "/Users/raimondospatola/Documents/AI Projects/jcode/crates/jcode-provider-core/src/lib.rs",
+      "old_string": "/// Fresh HTTP client for transport-fault retries.",
+      "new_string": "/// Pooled HTTP/1.1-only client for LOCAL OpenAI-compatible endpoints (Ollama, LM Studio).\n///\n/// The shared cloud client enables HTTP/2 keep-alive pings, which are meant for remote\n/// providers. A local server such as Ollama only speaks cleartext HTTP/1.1 and does not\n/// support h2c; routing it through the HTTP/2-tuned client makes the FIRST connection\n/// stall for tens of seconds (observed ~58s, three ~15s attempt timeouts) before it\n/// finally falls back, while plain HTTP/1.1 connects in <1ms and answers in ~2s. Forcing\n/// HTTP/1.1 for local endpoints removes that first-request stall. Pooled so repeated turns\n/// reuse the connection.\npub fn shared_local_http1_client() -> reqwest::Client {\n    use std::sync::OnceLock;\n    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();\n    CLIENT\n        .get_or_init(|| {\n            reqwest::Client::builder()\n                .user_agent(JCODE_USER_AGENT)\n                .http1_only()\n                .connect_timeout(Duration::from_secs(5))\n                .tcp_keepalive(Some(Duration::from_secs(30)))\n                .pool_idle_timeout(Duration::from_secs(90))\n                .pool_max_idle_per_host(8)\n                .build()\n                .unwrap_or_else(|_| shared_http_client())\n        })\n        .clone()\n}\n\n/// Fresh HTTP client for transport-fault retries.",
+      "replace_all": false
+    },
+    "tool_use_id": "toolu_01NC1qiE29EuHEyMtj5ULigm"
+  },
+  {
+    "session_id": "120ec635-4140-4bf9-8fdc-24047e46c394",
+    "transcript_path": "/Users/raimondospatola/.claude/projects/-Users-raimondospatola-Documents-AI-Projects/120ec635-4140-4bf9-8fdc-24047e46c394.jsonl",
+    "cwd": "/Users/raimondospatola/Documents/AI Projects/jcode",
+    "permission_mode": "auto",
+    "effort": {
+      "level": "high"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "cd \"/Users/raimondospatola/Documents/AI Projects/jcode\" && grep -rnE \"fresh_transport_client|shared_http_client|pub use.*provider_core|pub use jcode_provider_core\" crates/jcode-base/src/provider.rs crates/jcode-base/src/provider/mod.rs 2>/dev/null | head; echo \"--- find provider mod file ---\"; ls crates/jcode-base/src/provider.rs crates/jcode-base/src/provider/mod.rs 2>&1 | head; echo \"--- how fresh_transport_client re-exported ---\"; grep -rn \"fresh_transport_client\\|shared_local_http1_client\\|provider_core::\" crates/jcode-base/src 2>/dev/null | grep -iE \"use |pub use|re-export\" | head",
+      "description": "Check provider-core re-export in jcode-base"
+    },
+    "tool_use_id": "toolu_017NqvFdAUkrE3rok7hVUKXw"
+  },
+  {
+    "session_id": "120ec635-4140-4bf9-8fdc-24047e46c394",
+    "transcript_path": "/Users/raimondospatola/.claude/projects/-Users-raimondospatola-Documents-AI-Projects/120ec635-4140-4bf9-8fdc-24047e46c394.jsonl",
+    "cwd": "/Users/raimondospatola/Documents/AI Projects/jcode",
+    "permission_mode": "auto",
+    "effort": {
+      "level": "high"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Read",
+    "tool_input": {
+      "file_path": "/Users/raimondospatola/Documents/AI Projects/jcode/crates/jcode-base/src/provider/mod.rs",
+      "offset": 52,
+      "limit": 12
+    },
+    "tool_use_id": "toolu_01WigQzKf5jTiem84uJ3YqK7"
+  },
+  {
+    "session_id": "120ec635-4140-4bf9-8fdc-24047e46c394",
+    "transcript_path": "/Users/raimondospatola/.claude/projects/-Users-raimondospatola-Documents-AI-Projects/120ec635-4140-4bf9-8fdc-24047e46c394.jsonl",
+    "cwd": "/Users/raimondospatola/Documents/AI Projects/jcode",
+    "permission_mode": "auto",
+    "effort": {
+      "level": "high"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Edit",
+    "tool_input": {
+      "file_path": "/Users/raimondospatola/Documents/AI Projects/jcode/crates/jcode-base/src/provider/mod.rs",
+      "old_string": "    model_name_for_provider, normalize_copilot_model_name, provider_from_model_key,\n    shared_http_client, summarize_model_catalog_refresh,\n};",
+      "new_string": "    model_name_for_provider, normalize_copilot_model_name, provider_from_model_key,\n    shared_http_client, shared_local_http1_client, summarize_model_catalog_refresh,\n};",
+      "replace_all": false
+    },
+    "tool_use_id": "toolu_01G3V1MFDtguem7NKDjLmLcx"
+  },
+  {
+    "session_id": "120ec635-4140-4bf9-8fdc-24047e46c394",
+    "transcript_path": "/Users/raimondospatola/.claude/projects/-Users-raimondospatola-Documents-AI-Projects/120ec635-4140-4bf9-8fdc-24047e46c394.jsonl",
+    "cwd": "/Users/raimondospatola/Documents/AI Projects/jcode",
+    "permission_mode": "auto",
+    "effort": {
+      "level": "high"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Edit",
+    "tool_input": {
+      "file_path": "/Users/raimondospatola/Documents/AI Projects/jcode/crates/jcode-base/src/provider/openrouter_sse_stream.rs",
+      "old_string": "fn local_endpoint_troubleshooting_hint(api_base: &str, model: &str) -> &'static str {",
+      "new_string": "/// A local OpenAI-compatible endpoint (Ollama / LM Studio) reachable over loopback.\n/// These speak cleartext HTTP/1.1 only; the HTTP/2-tuned cloud client stalls the first\n/// connection to them (see `shared_local_http1_client`).\nfn is_local_endpoint(api_base: &str) -> bool {\n    let lower = api_base.to_ascii_lowercase();\n    lower.contains(\"localhost\") || lower.contains(\"127.0.0.1\") || lower.contains(\"[::1]\")\n}\n\nfn local_endpoint_troubleshooting_hint(api_base: &str, model: &str) -> &'static str {",
+      "replace_all": false
+    },
+    "tool_use_id": "toolu_018QrUer3TiHf4BVZmccQG9H"
+  },
+  {
+    "session_id": "120ec635-4140-4bf9-8fdc-24047e46c394",
+    "transcript_path": "/Users/raimondospatola/.claude/projects/-Users-raimondospatola-Documents-AI-Projects/120ec635-4140-4bf9-8fdc-24047e46c394.jsonl",
+    "cwd": "/Users/raimondospatola/Documents/AI Projects/jcode",
+    "permission_mode": "auto",
+    "effort": {
+      "level": "high"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Edit",
+    "tool_input": {
+      "file_path": "/Users/raimondospatola/Documents/AI Projects/jcode/crates/jcode-base/src/provider/openrouter_sse_stream.rs",
+      "old_string": "        let attempt_client = if attempt == 0 {\n            client.clone()\n        } else {\n            crate::provider::fresh_transport_client()\n        };",
+      "new_string": "        let attempt_client = if is_local_endpoint(&api_base) {\n            // Local Ollama/LM Studio: force pooled HTTP/1.1 \u2014 the HTTP/2 keep-alive\n            // cloud client stalls the first connection to loopback for tens of seconds.\n            crate::provider::shared_local_http1_client()\n        } else if attempt == 0 {\n            client.clone()\n        } else {\n            crate::provider::fresh_transport_client()\n        };",
+      "replace_all": false
+    },
+    "tool_use_id": "toolu_01JtbVZasPfEzLjBdcxbcmE3"
+  },
+  {
+    "session_id": "120ec635-4140-4bf9-8fdc-24047e46c394",
+    "transcript_path": "/Users/raimondospatola/.claude/projects/-Users-raimondospatola-Documents-AI-Projects/120ec635-4140-4bf9-8fdc-24047e46c394.jsonl",
+    "cwd": "/Users/raimondospatola/Documents/AI Projects/jcode",
+    "permission_mode": "auto",
+    "effort": {
+      "level": "high"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "cd \"/Users/raimondospatola/Documents/AI Projects/jcode\" && git checkout -b fix/local-ollama-http1 2>&1 | tail -1 && export PATH=\"/opt/homebrew/bin:$PATH\" && echo \"build $(date +%T)\" && cargo build --release --bin jcode 2>&1 | tail -6; echo \"EXIT=${PIPESTATUS[0]} $(date +%T)\"",
+      "timeout": 400000,
+      "description": "Branch + build local-http1 fix",
+      "run_in_background": true
+    },
+    "tool_use_id": "toolu_01D4ftshYCWTutgBktig3kAM"
+  },
+  {
+    "session_id": "120ec635-4140-4bf9-8fdc-24047e46c394",
+    "transcript_path": "/Users/raimondospatola/.claude/projects/-Users-raimondospatola-Documents-AI-Projects/120ec635-4140-4bf9-8fdc-24047e46c394.jsonl",
+    "cwd": "/Users/raimondospatola/Documents/AI Projects/jcode",
+    "permission_mode": "auto",
+    "effort": {
+      "level": "high"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "f=/private/tmp/claude-501/-Users-raimondospatola-Documents-AI-Projects/de6e1721-0c5a-4d50-b4ab-99c6fe9f503b/tasks/bb2gi492q.output; echo \"=== build tail ===\"; tail -5 \"$f\" 2>/dev/null; echo \"=== still running? ===\"; pgrep -f \"cargo build\" >/dev/null && echo \"BUILDING\" || echo \"DONE\"",
+      "description": "Check build status"
+    },
+    "tool_use_id": "toolu_01RTxmNv8wvN4zLAzUKx7uS6"
+  },
+  {
+    "session_id": "120ec635-4140-4bf9-8fdc-24047e46c394",
+    "transcript_path": "/Users/raimondospatola/.claude/projects/-Users-raimondospatola-Documents-AI-Projects/120ec635-4140-4bf9-8fdc-24047e46c394.jsonl",
+    "cwd": "/Users/raimondospatola/Documents/AI Projects/jcode",
+    "permission_mode": "auto",
+    "effort": {
+      "level": "high"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "cd \"/Users/raimondospatola/Documents/AI Projects/jcode\" && export PATH=\"/opt/homebrew/bin:$PATH\" DO_NOT_TRACK=1 && scripts/install_release.sh --fast 2>&1 | tail -1; echo \"=== ensure model warm ===\"; curl -s http://127.0.0.1:11434/api/generate -d '{\"model\":\"gemma4:12b\",\"prompt\":\"hi\",\"stream\":false,\"keep_alive\":\"30m\",\"options\":{\"num_ctx\":16384,\"num_predict\":1}}' >/dev/null 2>&1; ollama ps 2>&1 | tail -1; echo \"=== stop server (cold-start) + timed run x2 ===\"; ~/.local/bin/jcode server stop --force >/dev/null 2>&1; sleep 1; for i in 1 2; do ~/.local/bin/jcode server stop --force >/dev/null 2>&1; sleep 1; t0=$(date +%s); ~/.local/bin/jcode run 'ok' >/tmp/jcv$i.log 2>&1; t1=$(date +%s); echo \"RUN$i (server cold): $((t1-t0))s \u2014 $(head -1 /tmp/jcv$i.log)\"; done",
+      "timeout": 180000,
+      "description": "Install + verify first-response latency drop"
+    },
+    "tool_use_id": "toolu_018F5BaiMcM2peNs8fnav741"
+  },
+  {
+    "session_id": "120ec635-4140-4bf9-8fdc-24047e46c394",
+    "transcript_path": "/Users/raimondospatola/.claude/projects/-Users-raimondospatola-Documents-AI-Projects/120ec635-4140-4bf9-8fdc-24047e46c394.jsonl",
+    "cwd": "/Users/raimondospatola/Documents/AI Projects/jcode",
+    "permission_mode": "auto",
+    "effort": {
+      "level": "high"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "export PATH=\"/opt/homebrew/bin:$PATH\" DO_NOT_TRACK=1; echo \"=== binary version ===\"; ~/.local/bin/jcode --version 2>&1 | tail -1; echo \"=== ensure warm ===\"; curl -s http://127.0.0.1:11434/api/generate -d '{\"model\":\"gemma4:12b\",\"prompt\":\"hi\",\"stream\":false,\"keep_alive\":\"30m\",\"options\":{\"num_ctx\":16384,\"num_predict\":1}}' >/dev/null 2>&1; echo \"=== 3 clean cold-server runs ===\"; for i in 1 2 3; do ~/.local/bin/jcode server stop --force >/dev/null 2>&1; sleep 2; t0=$(date +%s); ~/.local/bin/jcode run 'ok' >/tmp/jcc$i.log 2>&1; t1=$(date +%s); echo \"RUN$i cold: $((t1-t0))s\"; done; echo \"=== check transport in log (should be local http1, no 58s) ===\"; SL=$(ls -t ~/.jcode/logs/jcode-*.log | head -1); grep -E \"connection established in\" \"$SL\" | tail -3",
+      "timeout": 180000,
+      "description": "3 clean cold-server runs to confirm consistency"
+    },
+    "tool_use_id": "toolu_01Ae2KR51vC677THJuzMe3aj"
+  },
+  {
+    "session_id": "120ec635-4140-4bf9-8fdc-24047e46c394",
+    "transcript_path": "/Users/raimondospatola/.claude/projects/-Users-raimondospatola-Documents-AI-Projects/120ec635-4140-4bf9-8fdc-24047e46c394.jsonl",
+    "cwd": "/Users/raimondospatola/Documents/AI Projects/jcode",
+    "permission_mode": "auto",
+    "effort": {
+      "level": "high"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "cd \"/Users/raimondospatola/Documents/AI Projects/jcode\" && git add -A && git commit -q -m \"fix(provider): use HTTP/1.1 for local Ollama/LM Studio endpoints\n\nThe shared/fresh OpenAI-compatible transport clients enable HTTP/2 keep-alive\npings tuned for remote cloud providers. A local server (Ollama, LM Studio) speaks\ncleartext HTTP/1.1 only and does not support h2c, so routing it through the\nHTTP/2-tuned client stalls the FIRST connection to loopback for ~58s (three ~15s\nattempt timeouts) before it falls back \u2014 while plain HTTP/1.1 connects instantly\nand answers in ~2s. Add a pooled HTTP/1.1-only client (shared_local_http1_client)\nand use it in the SSE stream loop whenever the endpoint is localhost/127.0.0.1/[::1].\n\nMeasured: first cold-server response 58-69s -> 5-6s; 'HTTP connection established'\n58488ms -> ~1.8s. Subsequent (pooled) requests were already fast.\n\nCo-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>\" && git push -u origin fix/local-ollama-http1 2>&1 | tail -1 && gh pr create --repo RaggioS/jcode --base master --head fix/local-ollama-http1 --title \"Use HTTP/1.1 for local Ollama/LM Studio endpoints (fixes ~58s first-connection stall)\" --body \"## Problem\nThe first request of a fresh server to a local Ollama endpoint stalled ~58s (\\`HTTP connection established in 58488ms\\`), making the first TUI response take ~57-69s; subsequent (pooled) requests were fast. Root cause: the OpenAI-compatible transport uses an HTTP/2-keep-alive client tuned for remote cloud providers. Ollama speaks cleartext HTTP/1.1 only (no h2c), so the first connection retries (3\u00d7~15s) before falling back. \\`curl --http1.1\\` to the same endpoint answers in ~2s.\n\n## Fix\nAdd a pooled HTTP/1.1-only client (\\`shared_local_http1_client\\`) and use it in the SSE stream retry loop when the endpoint is \\`localhost\\`/\\`127.0.0.1\\`/\\`[::1]\\`.\n\n## Result\nFirst cold-server response **58-69s \u2192 5-6s** (3 clean runs: 5s/6s/5s). \\`HTTP connection established\\` 58488ms \u2192 ~1.8s. No change for remote providers (still HTTP/2).\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\" --assignee RaggioS 2>&1 | tail -1 && gh pr merge fix/local-ollama-http1 --repo RaggioS/jcode --squash --delete-branch 2>&1 | tail -1; echo \"rc=$?\"",
+      "description": "Commit + PR + merge the local-http1 fix"
+    },
+    "tool_use_id": "toolu_01RsYqqjtRPzmo3HyiWyrkiY"
   }
 ]
