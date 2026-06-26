@@ -581,20 +581,26 @@ impl GmailClient {
         in_reply_to: Option<&str>,
         thread_id: Option<&str>,
     ) -> Result<Message> {
+        self.send_message_with_attachments(to, subject, body, in_reply_to, thread_id, &[])
+            .await
+    }
+
+    /// Send a message, optionally with file attachments. When `attachments` is
+    /// empty this produces the same plain-text message as `send_message`;
+    /// otherwise it builds a `multipart/mixed` MIME body with each file
+    /// base64-encoded.
+    pub async fn send_message_with_attachments(
+        &self,
+        to: &str,
+        subject: &str,
+        body: &str,
+        in_reply_to: Option<&str>,
+        thread_id: Option<&str>,
+        attachments: &[std::path::PathBuf],
+    ) -> Result<Message> {
         let url = format!("{}/messages/send", GMAIL_API_BASE);
 
-        let mut headers = format!(
-            "To: {}\r\nSubject: {}\r\nContent-Type: text/plain; charset=utf-8\r\n",
-            to, subject
-        );
-        if let Some(reply_to) = in_reply_to {
-            headers.push_str(&format!(
-                "In-Reply-To: {}\r\nReferences: {}\r\n",
-                reply_to, reply_to
-            ));
-        }
-
-        let raw = format!("{}\r\n{}", headers, body);
+        let raw = build_raw_mime(to, subject, body, in_reply_to, attachments)?;
         let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw.as_bytes());
 
         let mut message = json!({ "raw": encoded });
@@ -628,6 +634,99 @@ impl GmailClient {
         self.request(reqwest::Method::POST, &url, Some(payload))
             .await?;
         Ok(())
+    }
+}
+
+/// Build a raw RFC 5322 message, optionally `multipart/mixed` with file
+/// attachments. Returns the full message including headers, suitable for
+/// base64url-encoding into the Gmail API `raw` field.
+fn build_raw_mime(
+    to: &str,
+    subject: &str,
+    body: &str,
+    in_reply_to: Option<&str>,
+    attachments: &[std::path::PathBuf],
+) -> Result<String> {
+    let mut reply_headers = String::new();
+    if let Some(reply_to) = in_reply_to {
+        reply_headers.push_str(&format!(
+            "In-Reply-To: {}\r\nReferences: {}\r\n",
+            reply_to, reply_to
+        ));
+    }
+
+    if attachments.is_empty() {
+        return Ok(format!(
+            "To: {}\r\nSubject: {}\r\n{}Content-Type: text/plain; charset=utf-8\r\n\r\n{}",
+            to, subject, reply_headers, body
+        ));
+    }
+
+    let boundary = format!("jcode_boundary_{}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0));
+    let mut raw = format!(
+        "To: {}\r\nSubject: {}\r\n{}MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=\"{}\"\r\n\r\n",
+        to, subject, reply_headers, boundary
+    );
+
+    // Body part.
+    raw.push_str(&format!("--{}\r\n", boundary));
+    raw.push_str("Content-Type: text/plain; charset=utf-8\r\n\r\n");
+    raw.push_str(body);
+    raw.push_str("\r\n");
+
+    // Attachment parts.
+    for path in attachments {
+        let data = std::fs::read(path)
+            .map_err(|e| anyhow::anyhow!("Failed to read attachment {}: {}", path.display(), e))?;
+        let file_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("attachment");
+        let mime_type = guess_mime_type(path);
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&data);
+
+        raw.push_str(&format!("--{}\r\n", boundary));
+        raw.push_str(&format!(
+            "Content-Type: {}; name=\"{}\"\r\n",
+            mime_type, file_name
+        ));
+        raw.push_str("Content-Transfer-Encoding: base64\r\n");
+        raw.push_str(&format!(
+            "Content-Disposition: attachment; filename=\"{}\"\r\n\r\n",
+            file_name
+        ));
+        // Wrap base64 at 76 chars per RFC 2045.
+        for chunk in encoded.as_bytes().chunks(76) {
+            raw.push_str(std::str::from_utf8(chunk).unwrap_or(""));
+            raw.push_str("\r\n");
+        }
+    }
+
+    raw.push_str(&format!("--{}--\r\n", boundary));
+    Ok(raw)
+}
+
+/// Best-effort MIME type from a file extension for email attachments.
+fn guess_mime_type(path: &std::path::Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("pdf") => "application/pdf",
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("txt") | Some("md") => "text/plain",
+        Some("csv") => "text/csv",
+        Some("json") => "application/json",
+        Some("zip") => "application/zip",
+        Some("doc") => "application/msword",
+        Some("docx") => {
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        }
+        _ => "application/octet-stream",
     }
 }
 

@@ -47,6 +47,8 @@ struct GmailInput {
     remove_labels: Option<Vec<String>>,
     #[serde(default)]
     confirmed: Option<bool>,
+    #[serde(default)]
+    attachments: Option<Vec<String>>,
 }
 
 #[async_trait]
@@ -85,6 +87,11 @@ impl Tool for GmailTool {
                 "confirmed": {
                     "type": "boolean",
                     "description": "Confirm."
+                },
+                "attachments": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Absolute file paths to attach (for draft/send actions)."
                 }
             }
         })
@@ -326,31 +333,64 @@ impl Tool for GmailTool {
                 let subject = params.subject.as_deref().unwrap_or("");
                 let body = params.body.as_deref().unwrap_or("");
 
+                let attachments: Vec<std::path::PathBuf> = params
+                    .attachments
+                    .as_deref()
+                    .unwrap_or(&[])
+                    .iter()
+                    .map(std::path::PathBuf::from)
+                    .collect();
+                for path in &attachments {
+                    if !path.is_file() {
+                        return Ok(ToolOutput::new(format!(
+                            "Attachment not found or not a file: {}",
+                            path.display()
+                        )));
+                    }
+                }
+
                 if params.confirmed != Some(true) {
+                    let attach_line = if attachments.is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            "Attachments:\n{}\n",
+                            attachments
+                                .iter()
+                                .map(|p| format!("  - {}", p.display()))
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        )
+                    };
                     return Ok(ToolOutput::new(format!(
                         "CONFIRMATION REQUIRED: Send this email?\n\n\
                          To: {}\n\
                          Subject: {}\n\
+                         {}\
                          Body:\n{}\n\n\
                          To confirm, call gmail again with the same parameters and confirmed: true.",
-                        to, subject, body
+                        to, subject, attach_line, body
                     )));
                 }
 
                 let msg = self
                     .client
-                    .send_message(
+                    .send_message_with_attachments(
                         to,
                         subject,
                         body,
                         params.in_reply_to.as_deref(),
                         params.thread_id.as_deref(),
+                        &attachments,
                     )
                     .await?;
 
                 Ok(ToolOutput::new(format!(
-                    "Email sent successfully.\nMessage ID: {}\nTo: {}\nSubject: {}",
-                    msg.id, to, subject
+                    "Email sent successfully.\nMessage ID: {}\nTo: {}\nSubject: {}\nAttachments: {}",
+                    msg.id,
+                    to,
+                    subject,
+                    attachments.len()
                 )))
             }
 
