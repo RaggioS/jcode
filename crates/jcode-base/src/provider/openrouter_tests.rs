@@ -2731,6 +2731,57 @@ fn loopback_endpoint_enables_reasoning_effort_for_any_model() {
     assert!(remote.available_efforts().is_empty());
 }
 
+/// Auto reasoning-escalation heuristic: fires only on prompts that look complex
+/// (signal keyword, long, or multi-question), so simple lookups/edits stay fast.
+#[test]
+fn auto_reasoning_heuristic_distinguishes_complex_from_simple() {
+    fn user_msg(t: &str) -> Message {
+        Message {
+            role: Role::User,
+            content: vec![ContentBlock::Text {
+                text: t.to_string(),
+                cache_control: None,
+            }],
+            timestamp: None,
+            tool_duration_ms: None,
+        }
+    }
+
+    // Simple asks: no escalation.
+    assert!(!latest_user_message_suggests_reasoning(&[user_msg(
+        "come si chiama questo file?"
+    )]));
+    assert!(!latest_user_message_suggests_reasoning(&[user_msg(
+        "fix the typo on line 3"
+    )]));
+
+    // Complex signals (IT/EN keywords): escalate.
+    assert!(latest_user_message_suggests_reasoning(&[user_msg(
+        "refactor this module to drop the duplication"
+    )]));
+    assert!(latest_user_message_suggests_reasoning(&[user_msg(
+        "progetta l'architettura del nuovo servizio"
+    )]));
+    assert!(latest_user_message_suggests_reasoning(&[user_msg(
+        "explain in detail why this race condition happens"
+    )]));
+
+    // The latest human message decides, ignoring a trailing assistant turn.
+    let thread = vec![
+        user_msg("debug this deadlock step by step"),
+        Message {
+            role: Role::Assistant,
+            content: vec![ContentBlock::Text {
+                text: "ok".to_string(),
+                cache_control: None,
+            }],
+            timestamp: None,
+            tool_duration_ms: None,
+        },
+    ];
+    assert!(latest_user_message_suggests_reasoning(&thread));
+}
+
 /// Issue #352: named profiles construct with the user's configured
 /// `openai_reasoning_effort` when the profile supports effort, instead of
 /// silently ignoring the config.

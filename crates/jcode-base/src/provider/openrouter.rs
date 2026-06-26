@@ -500,6 +500,109 @@ fn add_cache_breakpoint(messages: &mut [Message]) -> bool {
     false
 }
 
+/// Signal words/phrases that mark a turn as worth extra reasoning on the local
+/// lane. Conservative and bilingual (IT/EN): architecture, debugging, multi-step
+/// design — not everyday lookups/edits. Matched as lowercase substrings.
+const REASONING_SIGNAL_KEYWORDS: &[&str] = &[
+    "refactor",
+    "architett",
+    "architect",
+    "debug",
+    "race condition",
+    "concurren",
+    "concorren",
+    "deadlock",
+    "ottimizz",
+    "optimiz",
+    "algorit",
+    "progett",
+    "design ",
+    "dimostra",
+    "proof",
+    "root cause",
+    "causa radice",
+    "passo passo",
+    "step by step",
+    "step-by-step",
+    "pianifica",
+    "trade-off",
+    "tradeoff",
+    "in dettaglio",
+    "in detail",
+    "multi-step",
+    "end-to-end",
+    "migrat",
+    "migrazione",
+];
+
+/// Heuristic: does the latest human message in the thread look complex enough to
+/// warrant raising reasoning effort? Conservative — fires on an explicit signal
+/// keyword, a clearly long prompt, or several questions, so simple asks stay fast.
+fn latest_user_message_suggests_reasoning(messages: &[Message]) -> bool {
+    let mut latest = None;
+    for msg in messages.iter().rev() {
+        if let Role::User = msg.role {
+            let joined: String = msg
+                .content
+                .iter()
+                .filter_map(|b| match b {
+                    ContentBlock::Text { text, .. } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            if !joined.trim().is_empty() {
+                latest = Some(joined);
+                break;
+            }
+        }
+    }
+    let Some(text) = latest else {
+        return false;
+    };
+    let lower = text.to_ascii_lowercase();
+    if REASONING_SIGNAL_KEYWORDS.iter().any(|kw| lower.contains(kw)) {
+        return true;
+    }
+    let chars = text.chars().count();
+    let questions = text.matches('?').count();
+    chars >= 320 || questions >= 2
+}
+
+/// Local-lane auto reasoning escalation for a single request. Returns the effort
+/// to use now: when the user has not manually raised effort (still none/unset),
+/// the endpoint is loopback, config enables it, and the latest human message
+/// looks complex, bump to the configured level. Pure per-request — it never
+/// mutates stored effort, so a manual effort change (keybind) always wins.
+fn auto_escalated_reasoning_effort(
+    current: Option<String>,
+    api_base: &str,
+    messages: &[Message],
+) -> Option<String> {
+    if current.as_deref().map_or(false, |e| e != "none") {
+        return current; // manual raise wins
+    }
+    if !crate::provider_catalog::api_base_uses_localhost(api_base) {
+        return current;
+    }
+    let cfg = crate::config::config();
+    if !cfg.provider.auto_reasoning_effort {
+        return current;
+    }
+    if !latest_user_message_suggests_reasoning(messages) {
+        return current;
+    }
+    // Default to `low`: on a small local model (e.g. gemma4:12b) `medium`/`high`
+    // think for too long before answering (feels frozen), while `low` adds useful
+    // deliberation and still completes promptly.
+    let level = cfg
+        .provider
+        .auto_reasoning_effort_level
+        .as_deref()
+        .unwrap_or("low");
+    OpenRouterProvider::normalize_reasoning_effort(level).or(current)
+}
+
 async fn fetch_models_from_api(
     client: Client,
     api_base: String,

@@ -1083,6 +1083,14 @@ pub struct ProviderConfig {
     /// that think silently for minutes before emitting tokens. Default: 180.
     /// Overridable per-launch via `JCODE_STREAM_IDLE_TIMEOUT_SECS`.
     pub stream_idle_timeout_secs: u64,
+    /// Local lane only: auto-raise reasoning effort for a turn whose latest user
+    /// message looks complex (architecture, debugging, multi-step). Acts purely
+    /// per-request and only when effort is otherwise off and the endpoint is
+    /// loopback, so a manual effort change always wins. Default: false.
+    pub auto_reasoning_effort: bool,
+    /// Effort level used by `auto_reasoning_effort` (none|low|medium|high).
+    /// Default: medium.
+    pub auto_reasoning_effort_level: Option<String>,
 }
 
 impl Default for ProviderConfig {
@@ -1101,6 +1109,8 @@ impl Default for ProviderConfig {
             same_provider_account_failover: true,
             copilot_premium: None,
             stream_idle_timeout_secs: 180,
+            auto_reasoning_effort: false,
+            auto_reasoning_effort_level: None,
         }
     }
 }
