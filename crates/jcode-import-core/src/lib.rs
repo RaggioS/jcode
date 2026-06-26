@@ -70,6 +70,17 @@ pub struct ClaudeCodeEntry {
     pub timestamp: Option<String>,
     #[serde(default)]
     pub is_sidechain: bool,
+    /// Claude Code marks a compaction summary it generated when the context
+    /// filled. It is the best ready-made recap of the older conversation.
+    #[serde(default)]
+    pub is_compact_summary: bool,
+    /// Shown in the transcript but not re-sent to the model (e.g. the compaction
+    /// summary itself, certain notices).
+    #[serde(default)]
+    pub is_visible_in_transcript_only: bool,
+    /// Internal/meta entry, not part of the real conversation.
+    #[serde(default)]
+    pub is_meta: bool,
 }
 
 /// Message content in Claude Code format.

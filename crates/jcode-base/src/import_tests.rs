@@ -69,17 +69,15 @@ fn test_convert_blocks_content() {
         },
     ]);
     let blocks = convert_content_blocks(&content);
-    assert_eq!(blocks.len(), 3);
+    // Thinking blocks are dropped on import (offline model does not need Claude's
+    // hidden reasoning), so only text + tool_use remain.
+    assert_eq!(blocks.len(), 2);
 
     match &blocks[0] {
         ContentBlock::Text { text, .. } => assert_eq!(text, "hello"),
         _ => panic!("Expected text"),
     }
     match &blocks[1] {
-        ContentBlock::Reasoning { text } => assert_eq!(text, "let me think"),
-        _ => panic!("Expected reasoning"),
-    }
-    match &blocks[2] {
         ContentBlock::ToolUse { name, .. } => assert_eq!(name, "bash"),
         _ => panic!("Expected tool use"),
     }
@@ -298,9 +296,12 @@ fn test_import_claude_session_uses_recovered_live_transcript() {
         imported.id,
         imported_claude_code_session_id("live-session-1")
     );
+    // With no user config loaded, provider falls back to "claude-code" and the
+    // model is cleared so resume adopts the runtime (local) model instead of
+    // switching to the offline-unavailable Claude model the transcript recorded.
     assert_eq!(imported.provider_key.as_deref(), Some("claude-code"));
     assert_eq!(imported.working_dir.as_deref(), Some("/tmp/demo-project"));
-    assert_eq!(imported.model.as_deref(), Some("claude-sonnet-4-6"));
+    assert_eq!(imported.model, None);
     assert_eq!(imported.messages.len(), 2);
 }
 
@@ -490,4 +491,69 @@ fn test_resolve_resume_target_to_jcode_imports_codex_session() {
     );
     let loaded = Session::load(&imported_codex_session_id("codex-resolve-test")).unwrap();
     assert_eq!(loaded.messages.len(), 2);
+}
+
+fn txt_msg(role: Role, text: &str) -> StoredMessage {
+    StoredMessage {
+        id: crate::id::new_id("msg"),
+        role,
+        content: vec![ContentBlock::Text {
+            text: text.to_string(),
+            cache_control: None,
+        }],
+        display_role: None,
+        timestamp: None,
+        tool_duration_ms: None,
+        token_usage: None,
+    }
+}
+
+#[test]
+fn import_recap_prefers_compaction_summary() {
+    let r = build_import_recap(Some("THE SUMMARY"), &["p1".into()], 5).unwrap();
+    assert!(r.contains("THE SUMMARY"));
+    assert!(r.contains("omitted")); // dropped note present
+}
+
+#[test]
+fn import_recap_falls_back_to_prompts_only_when_dropped() {
+    // No summary, nothing dropped -> no recap (full convo fits).
+    assert!(build_import_recap(None, &["p1".into()], 0).is_none());
+    // No summary but history dropped -> prompt-thread recap.
+    let r = build_import_recap(None, &["p1".into(), "p2".into()], 3).unwrap();
+    assert!(r.contains("p1") && r.contains("p2"));
+}
+
+#[test]
+fn import_budget_keeps_recent_tail() {
+    let mut msgs: Vec<StoredMessage> = (0..10)
+        .map(|i| txt_msg(Role::User, &"x".repeat(100).replace('x', &i.to_string())))
+        .collect();
+    let dropped = truncate_messages_to_recent_budget(&mut msgs, 350);
+    assert_eq!(dropped + msgs.len(), 10);
+    assert!(!msgs.is_empty() && msgs.len() <= 4);
+}
+
+#[test]
+fn import_budget_trims_leading_orphan_tool_result() {
+    let mut msgs = vec![
+        StoredMessage {
+            id: crate::id::new_id("msg"),
+            role: Role::User,
+            content: vec![ContentBlock::ToolResult {
+                tool_use_id: "orphan".into(),
+                content: "r".into(),
+                is_error: None,
+            }],
+            display_role: None,
+            timestamp: None,
+            tool_duration_ms: None,
+            token_usage: None,
+        },
+        txt_msg(Role::Assistant, "clean turn"),
+    ];
+    // Budget large enough to keep both, but the leading orphan tool_result must be trimmed.
+    let dropped = truncate_messages_to_recent_budget(&mut msgs, 1_000_000);
+    assert_eq!(dropped, 1);
+    assert!(matches!(msgs[0].content[0], ContentBlock::Text { .. }));
 }

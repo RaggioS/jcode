@@ -36,22 +36,15 @@ our changes live on `master` (merged) and are kept rebase-able on top of upstrea
    - `logs/*.json` are Claude Code hook event logs that churn on every run and showed as permanent
      uncommitted changes. Gitignored and untracked (regenerated locally, kept out of the repo).
 
-5. **Cross-harness resume `--resume-external <path>`** — `crates/jcode-app-core/src/external_resume.rs`
-   (new), `crates/jcode-app-core/src/lib.rs`, `src/cli/args.rs`, `src/cli/dispatch.rs`.
-   - Continue a conversation started in **Claude Code** offline with the local model. The flag imports a
-     Claude Code transcript (`~/.claude/projects/<proj>/<id>.jsonl`) into a fresh local session, then enters
-     the normal `--resume <id>` path (so no resume/TUI code changes).
-   - **Mechanical, no model calls** (at switch time Claude is out of tokens, so an LLM recap is impossible):
-     parses the JSONL, keeps only `user`/`assistant` lines, drops sidechain/meta/visible-only and `thinking`
-     blocks, maps `text`/`tool_use`/`tool_result` (truncating huge tool outputs).
-   - **Recap**: reuses the latest `isCompactSummary` block Claude already wrote (captured *before* the
-     visible-only skip filter — Claude marks the summary `isVisibleInTranscriptOnly`); falls back to the
-     user-prompt thread when no compaction summary exists.
-   - **Budget**: prepends the recap, then keeps the most recent messages within ~80k tokens (constants at the
-     top of the module), noting how many older messages were omitted.
-   - The new session is tagged `provider_key = "ollama-local"`, `model = "gemma4:12b"`, `working_dir` from the
-     transcript `cwd`, title `↩ <aiTitle>`. Unit-tested (parse/skip, thinking-drop, tool-result truncation,
-     recap precedence, budget). Launcher integration ("Continue from Claude Code" button) is a follow-up.
+5. **Offline-friendly Claude Code import** — `crates/jcode-base/src/import.rs`.
+   - jcode already lists Claude Code sessions in the `/resume` picker and imports the selected one
+     (`import_session_from_file`). Upstream imports the **full** transcript verbatim and tags the session with
+     the original `claude-code` provider + Claude model — fine for continuing with Claude, but on the local
+     offline lane a long session blows the context budget and the wrong provider is selected on resume.
+   - This patch makes the importer offline-friendly: drop `thinking` blocks, prepend a **recap** from the
+     latest `isCompactSummary` Claude already wrote (fallback: the user-prompt thread), keep only the most
+     recent messages within a token budget, and tag the imported session with the **configured default
+     provider/model** so resuming continues with the local model instead of Claude.
 
 ## Runtime configuration (NOT in this repo — machine-local, templated in `pocket-llm/jcode/`)
 
