@@ -449,21 +449,6 @@ fn auth_doctor_provider_arg<'a>(
 }
 
 fn resolve_resume_arg(args: &mut Args) -> Result<()> {
-    // `--resume-external <path>` converts an external transcript (Claude Code
-    // `.jsonl`) into a fresh local session, then resumes it via the normal path.
-    if let Some(path) = args
-        .resume_external
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        let new_id = crate::external_resume::import_claude_session(std::path::Path::new(path))?;
-        if !output::quiet_enabled() {
-            eprintln!("Imported Claude Code transcript into session {new_id}");
-        }
-        args.resume = Some(new_id);
-    }
-
     if let Some(ref resume_id) = args.resume {
         if resume_id.is_empty() {
             return tui_launch::list_sessions();
