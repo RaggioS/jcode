@@ -71,11 +71,27 @@ our changes live on `master` (merged) and are kept rebase-able on top of upstrea
      user `[providers.*]` entry) and, when its endpoint host is loopback, emits the bare model. Single local
      endpoint → no routing ambiguity. Remote/cloud profiles keep their prefix (cross-provider restore intact).
 
+8. **Runtime reasoning toggle for local loopback endpoints** — `crates/jcode-base/src/provider/openrouter.rs`.
+   - Upstream only accepts the DeepSeek-style top-level `reasoning_effort` field for the `deepseek` profile
+     id or a DeepSeek-family model (`profile_supports_reasoning_effort`). A local Ollama endpoint serving
+     gemma4 matched neither, so `set_reasoning_effort` / the effort-increase keybind were inert and the only
+     way to control reasoning was pinning it in `extra_body` — which is merged last and overrides the
+     jcode-generated field, permanently locking the value and defeating any runtime change.
+   - This patch treats any loopback endpoint as effort-capable (keyed on `api_base_uses_localhost`, not on a
+     model name — model-agnostic, consistent with patches 6/7). `supports_deepseek_reasoning_effort` and
+     `initial_reasoning_effort` both honor it, so the local lane constructs at the configured
+     `[provider] openai_reasoning_effort` (`"none"` = OFF, fast cold start) and the keybind escalates it live
+     (none → low → medium → high) only when a task needs it — no prompt-cache cost, since `reasoning_effort`
+     is a request-body field, not part of the cached tools/prompt prefix. Remote endpoints keep upstream's
+     model-based auto-detection unchanged.
+
 ## Runtime configuration (NOT in this repo — machine-local, templated in `pocket-llm/jcode/`)
 
-- **Thinking off** for gemma4: Ollama `/v1` honors top-level `reasoning_effort`. Set via a named provider
-  in `~/.jcode/config.toml` (`[providers.ollama-local] extra_body = { reasoning_effort = "none" }`) or the
-  `JCODE_OPENAI_EXTRA_BODY='{"reasoning_effort":"none"}'` env in the launcher.
+- **Reasoning starts OFF, escalates on demand** for gemma4: Ollama `/v1` honors the top-level
+  `reasoning_effort` field, and patch 8 makes the loopback endpoint effort-capable. So instead of pinning
+  `reasoning_effort` in `extra_body` (which would lock it), set the cold-start default with
+  `[provider] openai_reasoning_effort = "none"` and let the effort-increase keybind raise it per-task.
+  `extra_body` keeps only `temperature` / `top_p`; the launcher's `JCODE_OPENAI_EXTRA_BODY` mirrors this.
 - **Full 256k context**: `context_window = 262144` on the model entry. gemma4's KV cache stays small
   (windowed attention + q8_0), so the full native window loads 100% on GPU on a 16GB Mac.
 - **Lean tool profile for fast cold start**: `[tools] profile = "acp"` keeps the full coding tool set but
