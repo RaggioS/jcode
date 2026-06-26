@@ -2702,6 +2702,35 @@ fn named_profile_supports_reasoning_effort_config_override() {
     );
 }
 
+/// Local lane: a loopback Ollama endpoint honors the DeepSeek-style
+/// `reasoning_effort` field for any model, so the runtime effort toggle works
+/// (start at `none` for a fast cold start, escalate on demand). Keyed on the
+/// loopback endpoint, not on any model name.
+#[test]
+fn loopback_endpoint_enables_reasoning_effort_for_any_model() {
+    let provider = OpenRouterProvider {
+        api_base: "http://127.0.0.1:11434/v1".to_string(),
+        ..make_custom_compatible_provider()
+    };
+    provider.set_model("gemma4:12b").unwrap();
+    assert_eq!(
+        provider.available_efforts(),
+        vec!["none", "low", "medium", "high", "max"]
+    );
+    provider
+        .set_reasoning_effort("medium")
+        .expect("loopback Ollama accepts reasoning effort regardless of model");
+    assert_eq!(provider.reasoning_effort(), Some("medium".to_string()));
+    provider.set_reasoning_effort("none").unwrap();
+    assert_eq!(provider.reasoning_effort(), Some("none".to_string()));
+
+    // A remote OpenAI-compatible endpoint keeps the model-based auto-detection:
+    // a non-DeepSeek model gets no effort support.
+    let remote = make_custom_compatible_provider();
+    remote.set_model("some-random-model").unwrap();
+    assert!(remote.available_efforts().is_empty());
+}
+
 /// Issue #352: named profiles construct with the user's configured
 /// `openai_reasoning_effort` when the profile supports effort, instead of
 /// silently ignoring the config.
