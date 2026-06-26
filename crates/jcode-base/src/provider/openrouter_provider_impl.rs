@@ -13,6 +13,10 @@ impl Provider for OpenRouterProvider {
     ) -> Result<EventStream> {
         let model = self.model.read().await.clone();
         let reasoning_effort = self.reasoning_effort();
+        // Local lane: optionally auto-raise effort for a complex prompt (gated on
+        // loopback + config + effort-still-off; a manual keybind change wins).
+        let reasoning_effort =
+            auto_escalated_reasoning_effort(reasoning_effort, &self.api_base, messages);
         let thinking_override = Self::thinking_override();
         // Moonshot's dedicated Kimi coding endpoint enables thinking server-side
         // by default and rejects any assistant tool-call message that lacks
