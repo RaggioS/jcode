@@ -85,6 +85,21 @@ our changes live on `master` (merged) and are kept rebase-able on top of upstrea
      is a request-body field, not part of the cached tools/prompt prefix. Remote endpoints keep upstream's
      model-based auto-detection unchanged.
 
+9. **Auto reasoning-escalation by prompt complexity (local lane)** — `crates/jcode-base/src/provider/openrouter.rs`,
+   `crates/jcode-base/src/provider/openrouter_provider_impl.rs`, `crates/jcode-config-types/src/lib.rs`.
+   - Complements patch 8's manual keybind: when `[provider] auto_reasoning_effort = true`, a request whose
+     latest human message looks complex (a bilingual IT/EN signal keyword — refactor, architett/architecture,
+     debug, deadlock, ottimizz/optimize, progett/design, migrat… — or a clearly long / multi-question prompt)
+     gets `reasoning_effort` raised to `auto_reasoning_effort_level` (default `low`) for that turn. `low` is
+     deliberate: on a small local model `medium`/`high` think too long before answering (e2e: a `medium`
+     design prompt did not finish in 160s; the same class of prompt at `low` completes in ~40s with a good
+     answer), so the auto level stays light.
+   - `auto_escalated_reasoning_effort()` runs at request build (where `self.reasoning_effort()` is read), so it
+     is **pure per-request**: it never mutates stored effort, fires only on a **loopback** endpoint and only
+     when effort is otherwise off (`none`/unset), and a manual effort-increase keybind always wins (a non-`none`
+     stored value short-circuits it). Simple lookups/edits stay at `none` (fast). Off by default (the new config
+     fields default to `false`/`None`); enabled in the local-lane config template.
+
 ## Runtime configuration (NOT in this repo — machine-local, templated in `pocket-llm/jcode/`)
 
 - **Reasoning starts OFF, escalates on demand** for gemma4: Ollama `/v1` honors the top-level
