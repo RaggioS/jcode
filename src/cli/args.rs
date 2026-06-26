@@ -59,6 +59,13 @@ pub(crate) struct Args {
     #[arg(long, global = true, num_args = 0..=1, default_missing_value = "")]
     pub(crate) resume: Option<String>,
 
+    /// Import an external coding-agent transcript (a Claude Code `.jsonl` from
+    /// `~/.claude/projects/...`) into a fresh local session and resume it, so a
+    /// conversation started in Claude Code can be continued offline with the
+    /// local model. Mechanical import (no model calls).
+    #[arg(long, global = true, value_name = "PATH")]
+    pub(crate) resume_external: Option<String>,
+
     /// Internal: launched as a freshly spawned window, so skip heavy local resume bootstrap.
     #[arg(long, global = true, hide = true)]
     pub(crate) fresh_spawn: bool,
