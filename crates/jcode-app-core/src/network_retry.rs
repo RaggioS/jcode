@@ -55,6 +55,79 @@ fn classify_text(text: &str) -> Option<String> {
     None
 }
 
+/// Default Ollama API socket. A `connection refused` against this on loopback is
+/// not a real network outage — the local model server simply isn't running — so
+/// it can be revived in place (see [`try_revive_local_ollama`]) instead of
+/// waiting on internet connectivity, which is already up and would just spin.
+const OLLAMA_LOCAL_MARKERS: [&str; 2] = ["127.0.0.1:11434", "localhost:11434"];
+
+/// True when an error chain points at a downed local Ollama server (the request
+/// targeted the loopback Ollama port and was refused). Model-agnostic: it keys on
+/// the port, not on any model name, so it covers whatever local model is loaded.
+pub fn is_local_ollama_outage_error(error: &(dyn std::error::Error + 'static)) -> bool {
+    let mut parts = Vec::new();
+    let mut current = Some(error);
+    while let Some(err) = current {
+        parts.push(err.to_string().to_ascii_lowercase());
+        current = err.source();
+    }
+    is_local_ollama_outage_text(&parts.join(" | "))
+}
+
+/// Message-string variant of [`is_local_ollama_outage_error`] for stream-error
+/// events that surface a formatted string rather than a typed error.
+pub fn is_local_ollama_outage_message(message: &str) -> bool {
+    is_local_ollama_outage_text(&message.to_ascii_lowercase())
+}
+
+fn is_local_ollama_outage_text(lower: &str) -> bool {
+    lower.contains("connection refused")
+        && OLLAMA_LOCAL_MARKERS.iter().any(|marker| lower.contains(marker))
+}
+
+/// Revive a downed local Ollama server in place. Returns immediately if the API
+/// port is already accepting connections; otherwise spawns `ollama serve` and
+/// polls the port for up to ~20s. The spawn inherits this process's environment,
+/// so the launcher's `OLLAMA_*` tuning (context length, KV-cache type, keep-alive)
+/// carries through without being hardcoded here. No-op-safe when `ollama` is not
+/// installed (returns false → caller falls back to the normal network wait).
+pub async fn try_revive_local_ollama() -> bool {
+    if ollama_api_port_open().await {
+        return true;
+    }
+    if !command_exists("ollama").await {
+        return false;
+    }
+    let spawned = Command::new("ollama")
+        .arg("serve")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(false) // outlive this Child handle; session_end hook reaps it
+        .spawn();
+    if spawned.is_err() {
+        return false;
+    }
+    for _ in 0..20 {
+        sleep(Duration::from_secs(1)).await;
+        if ollama_api_port_open().await {
+            return true;
+        }
+    }
+    false
+}
+
+async fn ollama_api_port_open() -> bool {
+    matches!(
+        timeout(
+            Duration::from_secs(1),
+            tokio::net::TcpStream::connect("127.0.0.1:11434"),
+        )
+        .await,
+        Ok(Ok(_))
+    )
+}
+
 pub fn wait_plan() -> NetworkWaitPlan {
     #[cfg(target_os = "linux")]
     {
@@ -172,5 +245,28 @@ mod tests {
         assert!(classify_message("temporary failure in name resolution").is_some());
         assert!(classify_message("network is unreachable").is_some());
         assert!(classify_message("401 unauthorized").is_none());
+    }
+
+    #[test]
+    fn detects_local_ollama_outage_from_message() {
+        // The real reqwest/Ollama failure string the TUI surfaces.
+        let msg = "error sending request for url (http://localhost:11434/v1/chat/completions): \
+                   client error (Connect): tcp connect error: Connection refused (os error 61)";
+        assert!(is_local_ollama_outage_message(msg));
+        assert!(is_local_ollama_outage_message(
+            "endpoint http://127.0.0.1:11434/v1/chat/completions Connection refused"
+        ));
+    }
+
+    #[test]
+    fn ignores_non_local_or_non_refused_failures() {
+        // Remote endpoint refused → not a local-Ollama revive case.
+        assert!(!is_local_ollama_outage_message(
+            "https://openrouter.ai/api/v1/chat/completions: Connection refused"
+        ));
+        // Local endpoint but a different failure (timeout, not refused).
+        assert!(!is_local_ollama_outage_message(
+            "http://127.0.0.1:11434/v1/chat/completions: operation timed out"
+        ));
     }
 }
