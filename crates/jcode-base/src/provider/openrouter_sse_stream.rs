@@ -27,6 +27,66 @@ fn local_endpoint_troubleshooting_hint(api_base: &str, model: &str) -> &'static 
     "Hint: check network connectivity, DNS/TLS, that the base URL includes the API version (usually /v1), and that the model exists on the provider."
 }
 
+/// True when the endpoint is the loopback Ollama API (port 11434). A
+/// `connection refused` here is not a network outage — the local model server
+/// is simply down — so it can be revived in place (see [`try_revive_local_ollama`]).
+fn is_local_ollama_api(api_base: &str) -> bool {
+    let lower = api_base.to_ascii_lowercase();
+    lower.contains("localhost:11434") || lower.contains("127.0.0.1:11434")
+}
+
+async fn ollama_api_port_open() -> bool {
+    matches!(
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            tokio::net::TcpStream::connect("127.0.0.1:11434"),
+        )
+        .await,
+        Ok(Ok(_))
+    )
+}
+
+/// Bring a downed local Ollama back up in place. Returns immediately if the API
+/// port is already accepting connections; otherwise spawns `ollama serve` and
+/// polls the port for up to ~15s, so the surrounding retry loop reconnects on
+/// its next attempt instead of spinning forever against a dead server. The spawn
+/// inherits this process's environment, so the launcher's `OLLAMA_*` tuning
+/// (context length, KV-cache type, keep-alive) carries through. No-op-safe when
+/// `ollama` is not installed.
+///
+/// NOTE: a twin of this lives in `jcode-app-core::network_retry` for the
+/// TUI-side retry paths. `jcode-base` is the lower crate and cannot depend on
+/// `jcode-app-core`, so the small spawn+poll is duplicated rather than shared.
+async fn try_revive_local_ollama() -> bool {
+    if ollama_api_port_open().await {
+        return true;
+    }
+    let ollama_present = tokio::process::Command::new("sh")
+        .arg("-c")
+        .arg("command -v ollama >/dev/null 2>&1")
+        .status()
+        .await
+        .map(|status| status.success())
+        .unwrap_or(false);
+    if !ollama_present {
+        return false;
+    }
+    let _ = tokio::process::Command::new("ollama")
+        .arg("serve")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(false) // outlive this handle; session_end hook reaps it
+        .spawn();
+    for _ in 0..15 {
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        if ollama_api_port_open().await {
+            return true;
+        }
+    }
+    false
+}
+
 // ============================================================================
 // SSE Stream Parser
 // ============================================================================
@@ -111,6 +171,22 @@ pub(super) async fn run_stream_with_retries(
                 // Full anyhow chain ({:#}) so a `.context(...)`-wrapped transport
                 // cause (e.g. TLS BadRecordMac) is visible to the classifier.
                 let error_str = format!("{e:#}").to_lowercase();
+                // Local Ollama server down (connection refused on loopback): the
+                // request never left the machine, so plain retries spin forever
+                // against a dead port. Revive it in place, then reconnect on the
+                // next attempt. Covers every caller of this stream (interactive
+                // turn loop, swarm workers, deferred remote retry).
+                if is_local_ollama_api(&api_base)
+                    && error_str.contains("connection refused")
+                    && attempt + 1 < MAX_RETRIES
+                    && try_revive_local_ollama().await
+                {
+                    crate::logging::info(
+                        "Local Ollama server was down; restarted it in place, retrying.",
+                    );
+                    last_error = Some(e);
+                    continue;
+                }
                 if is_retryable_error(&error_str) && attempt + 1 < MAX_RETRIES {
                     if saw_output {
                         // Partial output already reached the consumer; tell it
