@@ -62,6 +62,16 @@ our changes live on `master` (merged) and are kept rebase-able on top of upstrea
      `jcode-app-core`, so the small spawn+poll is duplicated there rather than shared. Verified e2e: kill
      Ollama, `jcode run` revives it in place and completes.
 
+7. **Bare model on restore for local loopback profiles** — `crates/jcode-base/src/provider/selection.rs`.
+   - A session tagged with a local OpenAI-compatible provider (Ollama / LM Studio) re-emitted the
+     `<provider>:` routing prefix on restore (`model_switch_request_for_session_{model,route}`). Upstream's
+     strip only runs in `OpenRouterProvider::set_model`; a session launched under the bare built-in `ollama`
+     runtime applies the spec without it, so `ollama-local:gemma4:12b` leaked to the loopback endpoint and
+     was rejected with `400 invalid model name`.
+   - `session_provider_is_local_loopback(provider_key)` resolves the provider (built-in catalog profile or
+     user `[providers.*]` entry) and, when its endpoint host is loopback, emits the bare model. Single local
+     endpoint → no routing ambiguity. Remote/cloud profiles keep their prefix (cross-provider restore intact).
+
 ## Runtime configuration (NOT in this repo — machine-local, templated in `pocket-llm/jcode/`)
 
 - **Thinking off** for gemma4: Ollama `/v1` honors top-level `reasoning_effort`. Set via a named provider
