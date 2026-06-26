@@ -55,6 +55,12 @@ our changes live on `master` (merged) and are kept rebase-able on top of upstrea
      `localhost:11434`, not on any model name) and revives the server in place: spawn `ollama serve`, poll
      the API port up to ~20s, then retry. The spawn inherits the process env so the launcher's `OLLAMA_*`
      tuning carries through. Remote/cloud providers are unaffected (the loopback guard excludes them).
+   - The TUI-layer hook (`turn.rs`) only covers the interactive turn loop. The **comprehensive** revive
+     lives one layer down in the provider stream retry loop (`run_stream_with_retries`,
+     `openrouter_sse_stream.rs`), the single chokepoint every caller funnels through (turn loop, swarm
+     workers, deferred client→daemon retry, headless `jcode run`). `jcode-base` cannot depend on
+     `jcode-app-core`, so the small spawn+poll is duplicated there rather than shared. Verified e2e: kill
+     Ollama, `jcode run` revives it in place and completes.
 
 ## Runtime configuration (NOT in this repo — machine-local, templated in `pocket-llm/jcode/`)
 
