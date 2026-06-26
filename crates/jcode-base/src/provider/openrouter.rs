@@ -982,6 +982,19 @@ impl OpenRouterProvider {
         if let Some(explicit) = self.reasoning_effort_support {
             return explicit;
         }
+        // Local Ollama (loopback /v1) honors the DeepSeek-style top-level
+        // `reasoning_effort` field. Enable the runtime effort toggle for any
+        // loopback endpoint regardless of model id, so the local lane can start
+        // at `none` (fast cold start) and escalate on demand. Keyed on the
+        // endpoint, not on any model name. Excludes real OpenRouter (which uses
+        // the unified `reasoning` object) even if it is mocked on loopback.
+        if !Self::profile_supports_unified_reasoning(
+            self.profile_id.as_deref(),
+            self.send_openrouter_headers,
+        ) && crate::provider_catalog::api_base_uses_localhost(&self.api_base)
+        {
+            return true;
+        }
         if Self::profile_supports_reasoning_effort(self.profile_id.as_deref()) {
             return true;
         }
@@ -1020,9 +1033,12 @@ impl OpenRouterProvider {
     fn initial_reasoning_effort(
         reasoning_effort_support: Option<bool>,
         profile_id: Option<&str>,
+        api_base: &str,
     ) -> Option<String> {
-        let supported =
-            reasoning_effort_support.unwrap_or(Self::profile_supports_reasoning_effort(profile_id));
+        let supported = reasoning_effort_support.unwrap_or_else(|| {
+            Self::profile_supports_reasoning_effort(profile_id)
+                || crate::provider_catalog::api_base_uses_localhost(api_base)
+        });
         if !supported {
             return None;
         }
@@ -1298,6 +1314,7 @@ impl OpenRouterProvider {
             reasoning_effort: Arc::new(RwLock::new(Self::initial_reasoning_effort(
                 profile.supports_reasoning_effort,
                 Some(profile_name),
+                &api_base,
             ))),
             api_base,
             auth,
@@ -1496,6 +1513,7 @@ impl OpenRouterProvider {
             reasoning_effort: Arc::new(RwLock::new(Self::initial_reasoning_effort(
                 None,
                 profile_id.as_deref(),
+                &api_base,
             ))),
             api_base,
             auth,
@@ -1604,6 +1622,7 @@ impl OpenRouterProvider {
             reasoning_effort: Arc::new(RwLock::new(Self::initial_reasoning_effort(
                 None,
                 Some(&resolved.id),
+                &api_base,
             ))),
             api_base,
             auth,
