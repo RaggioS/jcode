@@ -520,22 +520,17 @@ pub fn import_session_from_file(path: &Path, session_id: &str) -> Result<Session
                 .and_then(|s| s.summary.or(Some(s.first_prompt)))
         });
 
-    // Create jcode session. Tag it with the configured default provider and clear
-    // the model so resume continues with the LOCAL model: the transcript records
-    // Claude's model, and `restore_session` would otherwise try to switch to it
-    // (unavailable on the offline lane). With model = None, restore keeps whatever
-    // provider/model the resume runs with (e.g. the launcher's gemma4).
-    let cfg = crate::config::config();
+    // Create jcode session. Leave provider_key and model UNSET (None): the
+    // transcript records Claude's provider/model, but on the offline lane we
+    // want resume to adopt the RUNTIME provider/model (e.g. the launcher's
+    // ollama/gemma4). `restore_session` fills `session.model` from the live
+    // provider when it is None, and a non-None provider_key here would route the
+    // model name wrong (e.g. "ollama-local:gemma4:12b" -> Ollama 400 "invalid
+    // model name"). `provider_session_id` still records the Claude Code origin.
     let jcode_session_id = imported_claude_code_session_id(session_id);
     let mut session = Session::create_with_id(jcode_session_id, None, title);
     session.provider_session_id = Some(session_id.to_string());
-    session.provider_key = cfg
-        .provider
-        .default_provider
-        .clone()
-        .or_else(|| Some("claude-code".to_string()));
     session.working_dir = working_dir;
-    session.model = cfg.provider.default_model.clone();
     session.created_at = created_at;
     session.status = SessionStatus::Closed;
 

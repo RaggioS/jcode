@@ -296,10 +296,11 @@ fn test_import_claude_session_uses_recovered_live_transcript() {
         imported.id,
         imported_claude_code_session_id("live-session-1")
     );
-    // With no user config loaded, provider falls back to "claude-code" and the
-    // model is cleared so resume adopts the runtime (local) model instead of
-    // switching to the offline-unavailable Claude model the transcript recorded.
-    assert_eq!(imported.provider_key.as_deref(), Some("claude-code"));
+    // provider_key and model are left unset so resume adopts the runtime
+    // provider/model (e.g. the launcher's ollama/gemma4) instead of switching to
+    // the offline-unavailable Claude model the transcript recorded. A non-None
+    // provider_key would route the model name wrong on resume.
+    assert_eq!(imported.provider_key, None);
     assert_eq!(imported.working_dir.as_deref(), Some("/tmp/demo-project"));
     assert_eq!(imported.model, None);
     assert_eq!(imported.messages.len(), 2);
