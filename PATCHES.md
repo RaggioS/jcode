@@ -46,21 +46,20 @@ our changes live on `master` (merged) and are kept rebase-able on top of upstrea
      recent messages within a token budget, and tag the imported session with the **configured default
      provider/model** so resuming continues with the local model instead of Claude.
 
-6. **Self-heal a downed local Ollama mid-session** — `crates/jcode-app-core/src/network_retry.rs`,
-   `crates/jcode-tui/src/tui/app/turn.rs`.
+6. **Self-heal a downed local Ollama mid-session** — `crates/jcode-base/src/provider/openrouter_sse_stream.rs`.
    - A chat request that fails with `connection refused` against the loopback Ollama port is not a network
      outage — the local server simply died (auto-stop hook, manual kill, launcher race). Upstream's retry
      loop probes internet connectivity, which is up, so it retries against the dead server forever.
-   - This patch detects the loopback-port refusal (model-agnostic, keyed on `127.0.0.1:11434` /
-     `localhost:11434`, not on any model name) and revives the server in place: spawn `ollama serve`, poll
-     the API port up to ~20s, then retry. The spawn inherits the process env so the launcher's `OLLAMA_*`
-     tuning carries through. Remote/cloud providers are unaffected (the loopback guard excludes them).
-   - The TUI-layer hook (`turn.rs`) only covers the interactive turn loop. The **comprehensive** revive
-     lives one layer down in the provider stream retry loop (`run_stream_with_retries`,
-     `openrouter_sse_stream.rs`), the single chokepoint every caller funnels through (turn loop, swarm
-     workers, deferred client→daemon retry, headless `jcode run`). `jcode-base` cannot depend on
-     `jcode-app-core`, so the small spawn+poll is duplicated there rather than shared. Verified e2e: kill
-     Ollama, `jcode run` revives it in place and completes.
+   - The revive lives at the single chokepoint every caller funnels through: the provider stream retry loop
+     (`run_stream_with_retries`). On a loopback-Ollama `connection refused` (model-agnostic, keyed on port
+     11434, not on any model name) it spawns `ollama serve`, polls the API port (~15s), then the existing
+     retry loop reconnects on its next attempt. The spawn inherits the process env so the launcher's
+     `OLLAMA_*` tuning carries through. Remote/cloud endpoints are excluded by the loopback guard. This
+     covers the interactive turn loop, swarm workers, the deferred client→daemon retry, and headless
+     `jcode run`. Verified e2e: kill Ollama, `jcode run` revives it in place and completes (`HEAL_OK`).
+   - (An earlier first cut also added the revive at the TUI turn-loop retry sites in `turn.rs` +
+     `jcode-app-core::network_retry`; that was removed once the provider-layer chokepoint above made it
+     redundant — the TUI layer only sees errors the provider layer already failed to revive.)
 
 7. **Bare model on restore for local loopback profiles** — `crates/jcode-base/src/provider/selection.rs`.
    - A session tagged with a local OpenAI-compatible provider (Ollama / LM Studio) re-emitted the
