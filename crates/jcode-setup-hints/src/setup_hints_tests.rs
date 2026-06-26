@@ -74,45 +74,56 @@ fn first_three_launches_can_include_hotkey_notice_too() {
 }
 
 #[test]
-fn home_hotkey_shell_command_cds_home_with_no_args() {
-    let cmd = macos_terminal::hotkey_shell_command(
+fn default_resolved_hotkeys_match_legacy_three() {
+    // With no config, the resolver reproduces the historical three hotkeys.
+    let resolved = launch_hotkeys::resolve_launch_hotkeys(
+        &jcode_config_types::LaunchHotkeysConfig::default(),
         "/usr/local/bin/jcode",
-        macos_terminal::HotkeyTarget::Home,
         "/home/u/.jcode/hotkey/last_dir",
         "/home/u/.jcode/hotkey/last_repo",
     );
-    assert!(cmd.starts_with("cd \"$HOME\"; "));
-    // Home launch passes no extra subcommand to jcode.
-    assert!(!cmd.contains("self-dev"));
-    assert!(cmd.contains("'/usr/local/bin/jcode';"));
+    let chords: Vec<&str> = resolved.iter().map(|r| r.chord.as_str()).collect();
+    assert_eq!(chords, vec!["cmd+;", "cmd+'", "cmd+shift+'"]);
+
+    // Home launch passes no extra subcommand; self-dev passes `self-dev`.
+    let home = launch_hotkeys::shell_command_for(&resolved[0], "/usr/local/bin/jcode");
+    assert!(home.starts_with("cd \"$HOME\"; "));
+    assert!(!home.contains("self-dev"));
+
+    let last_dir = launch_hotkeys::shell_command_for(&resolved[1], "/usr/local/bin/jcode");
+    assert!(last_dir.contains("cat '/home/u/.jcode/hotkey/last_dir'"));
+    assert!(last_dir.contains("cd \"$HOME\""));
+
+    let selfdev = launch_hotkeys::shell_command_for(&resolved[2], "/usr/local/bin/jcode");
+    assert!(selfdev.contains("cat '/home/u/.jcode/hotkey/last_repo'"));
+    assert!(selfdev.contains("'/usr/local/bin/jcode' 'self-dev';"));
 }
 
 #[test]
-fn last_dir_hotkey_shell_command_reads_dir_file_at_launch() {
-    let cmd = macos_terminal::hotkey_shell_command(
+fn baked_repo_hotkey_cds_into_fixed_dir() {
+    // A config-baked per-repo hotkey opens a fixed directory.
+    let config = jcode_config_types::LaunchHotkeysConfig {
+        enabled: Some(true),
+        imported: true,
+        entries: vec![jcode_config_types::LaunchHotkeyEntry {
+            chord: "cmd+[".to_string(),
+            dir: "/Users/jeremy/jcode-github".to_string(),
+            label: "jcode-github".to_string(),
+            self_dev: false,
+        }],
+    };
+    let resolved = launch_hotkeys::resolve_launch_hotkeys(
+        &config,
         "/usr/local/bin/jcode",
-        macos_terminal::HotkeyTarget::LastDir,
         "/home/u/.jcode/hotkey/last_dir",
         "/home/u/.jcode/hotkey/last_repo",
     );
-    // Reads the recorded directory at fire time, falls back to $HOME.
-    assert!(cmd.contains("cat '/home/u/.jcode/hotkey/last_dir'"));
-    assert!(cmd.contains("cd \"$__jc_dir\""));
-    assert!(cmd.contains("cd \"$HOME\""));
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(resolved[0].chord, "cmd+[");
+    let cmd = launch_hotkeys::shell_command_for(&resolved[0], "/usr/local/bin/jcode");
+    assert!(cmd.contains("/Users/jeremy/jcode-github"));
+    assert!(cmd.contains("cd \"$HOME\""), "must keep a home fallback");
     assert!(!cmd.contains("self-dev"));
-}
-
-#[test]
-fn selfdev_hotkey_shell_command_reads_repo_file_and_passes_self_dev() {
-    let cmd = macos_terminal::hotkey_shell_command(
-        "/usr/local/bin/jcode",
-        macos_terminal::HotkeyTarget::SelfDev,
-        "/home/u/.jcode/hotkey/last_dir",
-        "/home/u/.jcode/hotkey/last_repo",
-    );
-    assert!(cmd.contains("cat '/home/u/.jcode/hotkey/last_repo'"));
-    // Self-dev launch invokes the `self-dev` subcommand.
-    assert!(cmd.contains("'/usr/local/bin/jcode' 'self-dev';"));
 }
 
 #[test]
@@ -130,52 +141,41 @@ fn should_record_last_dir_skips_home_only() {
     assert!(super::should_record_last_dir(home, None));
 }
 
-#[test]
-fn hotkey_targets_have_distinct_scripts_and_chords() {
-    use macos_terminal::HotkeyTarget;
-    let scripts: Vec<&str> = HotkeyTarget::ALL
-        .iter()
-        .map(|t| t.script_file_name())
-        .collect();
-    let chords: Vec<&str> = HotkeyTarget::ALL.iter().map(|t| t.chord_label()).collect();
-    // No two targets share a script file or a chord label.
-    for i in 0..scripts.len() {
-        for j in (i + 1)..scripts.len() {
-            assert_ne!(scripts[i], scripts[j], "scripts must be unique");
-            assert_ne!(chords[i], chords[j], "chords must be unique");
-        }
-    }
-}
-
 #[cfg(target_os = "macos")]
 #[test]
-fn install_writes_all_three_executable_launch_scripts() {
-    use macos_terminal::HotkeyTarget;
+fn install_writes_executable_scripts_and_plan() {
     use std::os::unix::fs::PermissionsExt;
 
     let dir = tempfile::tempdir().expect("tempdir");
-    super::write_hotkey_launch_scripts(
-        dir.path(),
-        MacTerminalKind::Ghostty,
+    let resolved = launch_hotkeys::resolve_launch_hotkeys(
+        &jcode_config_types::LaunchHotkeysConfig::default(),
         "/usr/local/bin/jcode",
         "/home/u/.jcode/hotkey/last_dir",
         "/home/u/.jcode/hotkey/last_repo",
+    );
+    let plan = super::write_hotkey_launch_scripts(
+        dir.path(),
+        MacTerminalKind::Ghostty,
+        "/usr/local/bin/jcode",
+        &resolved,
     )
     .expect("scripts should write");
 
-    for target in HotkeyTarget::ALL {
-        let path = dir.path().join(target.script_file_name());
-        let body = std::fs::read_to_string(&path).expect("script exists");
-        assert!(body.starts_with("#!/bin/bash"), "{target:?} is a bash script");
-        // Executable bit set so the listener can `sh script` / `open` it.
-        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
-        assert_eq!(mode & 0o111, 0o111, "{target:?} should be executable");
+    // One plan entry per resolved hotkey, each pointing at an executable bash
+    // script that exists on disk.
+    assert_eq!(plan.len(), resolved.len());
+    for entry in &plan {
+        let path = std::path::Path::new(&entry.script);
+        let body = std::fs::read_to_string(path).expect("script exists");
+        assert!(body.starts_with("#!/bin/bash"));
+        let mode = std::fs::metadata(path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o111, 0o111, "script should be executable");
     }
 
-    // Only the self-dev script invokes the self-dev subcommand.
-    let selfdev = std::fs::read_to_string(dir.path().join("launch_jcode_selfdev.sh")).unwrap();
+    // Only the self-dev (3rd) script invokes the self-dev subcommand.
+    let selfdev = std::fs::read_to_string(&plan[2].script).unwrap();
     assert!(selfdev.contains("self-dev"));
-    let home = std::fs::read_to_string(dir.path().join("launch_jcode_home.sh")).unwrap();
+    let home = std::fs::read_to_string(&plan[0].script).unwrap();
     assert!(!home.contains("self-dev"));
 }
 

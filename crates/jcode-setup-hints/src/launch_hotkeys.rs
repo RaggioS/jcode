@@ -17,9 +17,19 @@
 //! what we can assert in tests, and the listener stays a thin dispatcher.
 
 use jcode_config_types::{LaunchHotkeyEntry, LaunchHotkeysConfig};
+use serde::{Deserialize, Serialize};
 
 use crate::keymap::KeyChord;
 use crate::macos_terminal::{escape_shell_single_quotes, paused_jcode_shell_command_with_args};
+
+/// One entry in the listener's `plan.json`: the chord to register and the script
+/// to run when it fires. Written by the installer, read by the launchd listener,
+/// so the listener stays a thin dispatcher that never re-parses config.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct PlanEntry {
+    pub chord: String,
+    pub script: String,
+}
 
 /// A fully-resolved launch hotkey ready to be turned into a script and a chord
 /// registration.
