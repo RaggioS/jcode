@@ -46,6 +46,16 @@ our changes live on `master` (merged) and are kept rebase-able on top of upstrea
      recent messages within a token budget, and tag the imported session with the **configured default
      provider/model** so resuming continues with the local model instead of Claude.
 
+6. **Self-heal a downed local Ollama mid-session** — `crates/jcode-app-core/src/network_retry.rs`,
+   `crates/jcode-tui/src/tui/app/turn.rs`.
+   - A chat request that fails with `connection refused` against the loopback Ollama port is not a network
+     outage — the local server simply died (auto-stop hook, manual kill, launcher race). Upstream's retry
+     loop probes internet connectivity, which is up, so it retries against the dead server forever.
+   - This patch detects the loopback-port refusal (model-agnostic, keyed on `127.0.0.1:11434` /
+     `localhost:11434`, not on any model name) and revives the server in place: spawn `ollama serve`, poll
+     the API port up to ~20s, then retry. The spawn inherits the process env so the launcher's `OLLAMA_*`
+     tuning carries through. Remote/cloud providers are unaffected (the loopback guard excludes them).
+
 ## Runtime configuration (NOT in this repo — machine-local, templated in `pocket-llm/jcode/`)
 
 - **Thinking off** for gemma4: Ollama `/v1` honors top-level `reasoning_effort`. Set via a named provider

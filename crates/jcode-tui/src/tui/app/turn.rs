@@ -206,10 +206,18 @@ impl App {
                                     };
                                     status_spinner_renderer.draw_full(self, terminal)?;
                                     super::run_shell::reset_status_spinner_interval(&mut status_spinner_interval, self);
-                                    crate::network_retry::wait_until_probably_online().await;
-                                    self.push_display_message(DisplayMessage::system(
-                                        "Network connectivity looks restored; retrying request.".to_string(),
-                                    ));
+                                    if crate::network_retry::is_local_ollama_outage_error(err.as_ref())
+                                        && crate::network_retry::try_revive_local_ollama().await
+                                    {
+                                        self.push_display_message(DisplayMessage::system(
+                                            "Local model server (Ollama) was down — restarted it; retrying request.".to_string(),
+                                        ));
+                                    } else {
+                                        crate::network_retry::wait_until_probably_online().await;
+                                        self.push_display_message(DisplayMessage::system(
+                                            "Network connectivity looks restored; retrying request.".to_string(),
+                                        ));
+                                    }
                                     continue 'turn_loop;
                                 }
                                 return Err(err);
@@ -731,10 +739,18 @@ impl App {
                                                 listener: plan.listener_summary.clone(),
                                             };
                                             status_spinner_renderer.draw_full(self, terminal)?;
-                                            crate::network_retry::wait_until_probably_online().await;
-                                            self.push_display_message(DisplayMessage::system(
-                                                "Network connectivity looks restored; retrying request.".to_string(),
-                                            ));
+                                            if crate::network_retry::is_local_ollama_outage_message(&message)
+                                                && crate::network_retry::try_revive_local_ollama().await
+                                            {
+                                                self.push_display_message(DisplayMessage::system(
+                                                    "Local model server (Ollama) was down — restarted it; retrying request.".to_string(),
+                                                ));
+                                            } else {
+                                                crate::network_retry::wait_until_probably_online().await;
+                                                self.push_display_message(DisplayMessage::system(
+                                                    "Network connectivity looks restored; retrying request.".to_string(),
+                                                ));
+                                            }
                                             continue 'turn_loop;
                                         }
                                         return Err(anyhow::anyhow!("Stream error: {}", message));
@@ -1007,10 +1023,18 @@ impl App {
                                         listener: plan.listener_summary.clone(),
                                     };
                                     status_spinner_renderer.draw_full(self, terminal)?;
-                                    crate::network_retry::wait_until_probably_online().await;
-                                    self.push_display_message(DisplayMessage::system(
-                                        "Network connectivity looks restored; retrying request.".to_string(),
-                                    ));
+                                    if crate::network_retry::is_local_ollama_outage_error(e.as_ref())
+                                        && crate::network_retry::try_revive_local_ollama().await
+                                    {
+                                        self.push_display_message(DisplayMessage::system(
+                                            "Local model server (Ollama) was down — restarted it; retrying request.".to_string(),
+                                        ));
+                                    } else {
+                                        crate::network_retry::wait_until_probably_online().await;
+                                        self.push_display_message(DisplayMessage::system(
+                                            "Network connectivity looks restored; retrying request.".to_string(),
+                                        ));
+                                    }
                                     continue 'turn_loop;
                                 }
                                 return Err(e);
