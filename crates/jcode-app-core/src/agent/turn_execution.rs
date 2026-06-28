@@ -58,6 +58,29 @@ impl Agent {
             );
         }
 
+        // Inject grounding context (e.g. post-cutoff knowledge) from the
+        // user_prompt capturing hook before the user message. Deterministic and
+        // hook-driven: the model never has to decide to fetch it. Never blocks
+        // the turn — on no output / failure / timeout nothing is injected.
+        if crate::hooks::hook_configured("user_prompt") {
+            let cwd = self.working_dir().map(str::to_string);
+            let session_id = self.session.id.clone();
+            if let Some(context) =
+                crate::hooks::run_user_prompt_capture(&session_id, cwd.as_deref(), user_message)
+                    .await
+            {
+                self.add_message(
+                    Role::User,
+                    vec![ContentBlock::Text {
+                        text: format!(
+                            "[CONTEXT]\nGrounding context retrieved for this turn. Use it where relevant and attribute sources as instructed; it is not the user's words.\n\n{context}"
+                        ),
+                        cache_control: None,
+                    }],
+                );
+            }
+        }
+
         self.current_turn_system_reminder =
             system_reminder.filter(|value| !value.trim().is_empty());
 
