@@ -87,6 +87,7 @@ pub fn hook_command(event: &str) -> Option<String> {
         "session_end" => hooks.session_end.as_deref(),
         "pre_tool" => hooks.pre_tool.as_deref(),
         "post_tool" => hooks.post_tool.as_deref(),
+        "user_prompt" => hooks.user_prompt.as_deref(),
         _ => None,
     };
     raw.map(str::trim)
@@ -320,6 +321,104 @@ pub async fn run_pre_tool_gate(
     }
 }
 
+/// Max bytes of the user message exported via `JCODE_HOOK_USER_MESSAGE`.
+const USER_MESSAGE_ENV_LIMIT: usize = 16 * 1024;
+/// Max bytes of captured stdout injected as context (guards a runaway hook).
+const CAPTURE_OUTPUT_LIMIT: usize = 32 * 1024;
+
+/// Run the `user_prompt` capturing hook for a user turn, if configured.
+///
+/// The hook receives the user message on stdin (also truncated in
+/// `JCODE_HOOK_USER_MESSAGE`). On exit 0 its trimmed, length-capped stdout is
+/// returned for injection ahead of the user message; empty output, a non-zero
+/// exit, a timeout, or a spawn failure all return `None` (the turn proceeds
+/// unchanged — the hook can never block it).
+pub async fn run_user_prompt_capture(
+    session_id: &str,
+    working_dir: Option<&str>,
+    user_message: &str,
+) -> Option<String> {
+    let command_line = hook_command("user_prompt")?;
+
+    let mut event = HookEvent::new("user_prompt")
+        .session_id(session_id)
+        .field(
+            "USER_MESSAGE",
+            truncate_bytes(user_message, USER_MESSAGE_ENV_LIMIT),
+        );
+    if let Some(cwd) = working_dir {
+        event = event.cwd(cwd);
+    }
+
+    let std_cmd = match build_hook_process(&command_line, &event) {
+        Ok(cmd) => cmd,
+        Err(error) => {
+            crate::logging::warn(&format!(
+                "Hook 'user_prompt' command '{command_line}' is invalid: {error} (skipping injection)"
+            ));
+            return None;
+        }
+    };
+
+    let mut cmd = tokio::process::Command::from(std_cmd);
+    cmd.stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+
+    let mut child = match cmd.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            crate::logging::warn(&format!(
+                "Hook 'user_prompt' command '{command_line}' failed to start: {error} (skipping injection)"
+            ));
+            return None;
+        }
+    };
+
+    if let Some(mut stdin) = child.stdin.take() {
+        use tokio::io::AsyncWriteExt;
+        let _ = stdin.write_all(user_message.as_bytes()).await;
+        // Closing stdin signals EOF to hooks that read the whole input.
+        drop(stdin);
+    }
+
+    let timeout = std::time::Duration::from_millis(
+        crate::config::config().hooks.user_prompt_timeout_ms.max(1),
+    );
+    let output = match tokio::time::timeout(timeout, child.wait_with_output()).await {
+        Ok(Ok(output)) => output,
+        Ok(Err(error)) => {
+            crate::logging::warn(&format!(
+                "Hook 'user_prompt' command '{command_line}' failed: {error} (skipping injection)"
+            ));
+            return None;
+        }
+        Err(_elapsed) => {
+            crate::logging::warn(&format!(
+                "Hook 'user_prompt' command '{command_line}' timed out after {}ms (skipping injection)",
+                timeout.as_millis()
+            ));
+            return None;
+        }
+    };
+
+    if !matches!(output.status.code(), Some(0)) {
+        crate::logging::debug(&format!(
+            "Hook 'user_prompt' command '{command_line}' exited with {:?} (skipping injection)",
+            output.status.code()
+        ));
+        return None;
+    }
+
+    let captured = String::from_utf8_lossy(&output.stdout);
+    let trimmed = captured.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(truncate_bytes(trimmed, CAPTURE_OUTPUT_LIMIT).to_string())
+}
+
 #[cfg(test)]
 #[allow(clippy::await_holding_lock)]
 mod tests {
@@ -511,5 +610,91 @@ mod tests {
             None => crate::env::remove_var("JCODE_HOOK_TURN_END"),
         }
         assert_eq!(recorded, "turn_end|ses_obs|ok|1");
+    }
+
+    fn user_prompt_test_config(hook: &str, timeout_ms: u64) -> impl Drop + use<> {
+        struct EnvReset(Vec<(&'static str, Option<std::ffi::OsString>)>);
+        impl Drop for EnvReset {
+            fn drop(&mut self) {
+                for (key, previous) in self.0.drain(..) {
+                    match previous {
+                        Some(value) => crate::env::set_var(key, value),
+                        None => crate::env::remove_var(key),
+                    }
+                }
+            }
+        }
+        let reset = EnvReset(vec![
+            (
+                "JCODE_HOOK_USER_PROMPT",
+                std::env::var_os("JCODE_HOOK_USER_PROMPT"),
+            ),
+            (
+                "JCODE_HOOK_USER_PROMPT_TIMEOUT_MS",
+                std::env::var_os("JCODE_HOOK_USER_PROMPT_TIMEOUT_MS"),
+            ),
+        ]);
+        crate::env::set_var("JCODE_HOOK_USER_PROMPT", hook);
+        crate::env::set_var("JCODE_HOOK_USER_PROMPT_TIMEOUT_MS", timeout_ms.to_string());
+        reset
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn user_prompt_capture_injects_stdout_and_passes_message() {
+        let _guard = crate::storage::lock_test_env();
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let record = temp.path().join("stdin.txt");
+
+        // Hook echoes a context block on stdout, records the message it got on
+        // stdin, and exits 0. INFO noise to stderr must NOT pollute the capture.
+        let script = write_executable_script(
+            temp.path(),
+            "ground.sh",
+            &format!(
+                "#!/bin/sh\ncat > {}\necho noise >&2\necho \"fact: $JCODE_HOOK_USER_MESSAGE\"\nexit 0\n",
+                crate::terminal_launch::sh_escape(&record.to_string_lossy())
+            ),
+        );
+        let _env = user_prompt_test_config(&script.to_string_lossy(), 5000);
+        let out = run_user_prompt_capture("ses_u", None, "what is new").await;
+        assert_eq!(out.as_deref(), Some("fact: what is new"));
+        let recorded = std::fs::read_to_string(&record).expect("stdin recorded");
+        assert_eq!(recorded, "what is new");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn user_prompt_capture_returns_none_on_empty_nonzero_timeout_and_missing() {
+        let _guard = crate::storage::lock_test_env();
+        let temp = tempfile::TempDir::new().expect("temp dir");
+
+        // Empty stdout on exit 0 → nothing to inject.
+        let empty = write_executable_script(temp.path(), "empty.sh", "#!/bin/sh\nexit 0\n");
+        {
+            let _env = user_prompt_test_config(&empty.to_string_lossy(), 5000);
+            assert_eq!(run_user_prompt_capture("ses_u", None, "q").await, None);
+        }
+
+        // Non-zero exit → ignored even if it printed something.
+        let fail =
+            write_executable_script(temp.path(), "fail.sh", "#!/bin/sh\necho x\nexit 3\n");
+        {
+            let _env = user_prompt_test_config(&fail.to_string_lossy(), 5000);
+            assert_eq!(run_user_prompt_capture("ses_u", None, "q").await, None);
+        }
+
+        // Hangs past the timeout → skipped.
+        let hang = write_executable_script(temp.path(), "hang.sh", "#!/bin/sh\nsleep 30\n");
+        {
+            let _env = user_prompt_test_config(&hang.to_string_lossy(), 200);
+            assert_eq!(run_user_prompt_capture("ses_u", None, "q").await, None);
+        }
+
+        // Missing binary → skipped.
+        {
+            let _env = user_prompt_test_config("/nonexistent/hook-binary", 5000);
+            assert_eq!(run_user_prompt_capture("ses_u", None, "q").await, None);
+        }
     }
 }
