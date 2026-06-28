@@ -672,9 +672,19 @@ pub struct HooksConfig {
     /// Fields: TOOL_NAME, STATUS ("ok"/"error"), DURATION_MS, OUTPUT_BYTES.
     /// Env override: JCODE_HOOK_POST_TOOL.
     pub post_tool: Option<String>,
+    /// Capturing hook run before each user turn. Receives the user message on
+    /// stdin (also truncated in USER_MESSAGE). On exit 0 its stdout is injected
+    /// into the conversation as extra context ahead of the user message (e.g.
+    /// post-cutoff knowledge grounding); empty stdout or any non-zero exit
+    /// injects nothing. Unlike `pre_tool` it never blocks the turn.
+    /// Env override: JCODE_HOOK_USER_PROMPT.
+    pub user_prompt: Option<String>,
     /// Max milliseconds to wait for the pre_tool gate before failing open
     /// (default: 5000). Env override: JCODE_HOOK_PRE_TOOL_TIMEOUT_MS.
     pub pre_tool_timeout_ms: u64,
+    /// Max milliseconds to wait for the user_prompt capturing hook before
+    /// skipping it (default: 5000). Env override: JCODE_HOOK_USER_PROMPT_TIMEOUT_MS.
+    pub user_prompt_timeout_ms: u64,
 }
 
 impl Default for HooksConfig {
@@ -685,7 +695,9 @@ impl Default for HooksConfig {
             session_end: None,
             pre_tool: None,
             post_tool: None,
+            user_prompt: None,
             pre_tool_timeout_ms: 5000,
+            user_prompt_timeout_ms: 5000,
         }
     }
 }
