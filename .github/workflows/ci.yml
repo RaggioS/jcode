@@ -13,6 +13,9 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   SCCACHE_GHA_ENABLED: "true"
+  # Empty on forks, which do not inherit repository secrets. Steps cannot test the
+  # `secrets` context in an `if:`, so surface it here and test `env` instead.
+  DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
 
 jobs:
   quality:
@@ -30,7 +33,7 @@ jobs:
         # public https, so the key is not needed to build; without this guard the
         # action hard-fails ("ssh-private-key argument is empty") on any fork,
         # where repository secrets are not available.
-        if: ${{ secrets.DEPLOY_KEY != '' }}
+        if: ${{ env.DEPLOY_KEY != '' }}
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.DEPLOY_KEY }}
@@ -123,7 +126,7 @@ jobs:
         # public https, so the key is not needed to build; without this guard the
         # action hard-fails ("ssh-private-key argument is empty") on any fork,
         # where repository secrets are not available.
-        if: ${{ secrets.DEPLOY_KEY != '' }}
+        if: ${{ env.DEPLOY_KEY != '' }}
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.DEPLOY_KEY }}
@@ -239,7 +242,7 @@ jobs:
         # public https, so the key is not needed to build; without this guard the
         # action hard-fails ("ssh-private-key argument is empty") on any fork,
         # where repository secrets are not available.
-        if: ${{ secrets.DEPLOY_KEY != '' }}
+        if: ${{ env.DEPLOY_KEY != '' }}
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.DEPLOY_KEY }}
@@ -416,7 +419,7 @@ jobs:
         # public https, so the key is not needed to build; without this guard the
         # action hard-fails ("ssh-private-key argument is empty") on any fork,
         # where repository secrets are not available.
-        if: ${{ secrets.DEPLOY_KEY != '' }}
+        if: ${{ env.DEPLOY_KEY != '' }}
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.DEPLOY_KEY }}
