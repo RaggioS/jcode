@@ -824,6 +824,9 @@ mod tests {
 
     #[test]
     fn session_restore_emits_bare_model_for_local_loopback_profile() {
+        // Serialize with the other tests that swap JCODE_HOME: this reads the global
+        // config to resolve `[providers.*]` entries.
+        let _guard = crate::storage::lock_test_env();
         // The built-in Ollama profile is loopback (http://localhost:11434/v1), so a
         // restored session routed to it must NOT re-emit the `<profile>:` prefix —
         // the loopback endpoint would reject `ollama:gemma4:12b` as an invalid model
@@ -841,6 +844,9 @@ mod tests {
 
     #[test]
     fn session_restore_keeps_prefix_for_remote_openai_compatible_profile() {
+        // Serialize with the other tests that swap JCODE_HOME: this reads the global
+        // config to resolve `[providers.*]` entries.
+        let _guard = crate::storage::lock_test_env();
         // A non-loopback (cloud) OpenAI-compatible profile keeps its routing prefix
         // so cross-provider session restore still selects the right slot.
         assert!(!MultiProvider::session_provider_is_local_loopback("comtegra"));

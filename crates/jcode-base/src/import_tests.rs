@@ -549,7 +549,9 @@ fn test_resolve_resume_target_to_jcode_imports_claude_code_session() {
         loaded.provider_session_id.as_deref(),
         Some("claude-resolve-test")
     );
-    assert_eq!(loaded.provider_key.as_deref(), Some("claude-code"));
+    // Fork divergence: provider_key is left unset so resume adopts the runtime
+    // provider (the local lane), instead of routing back to claude-code.
+    assert_eq!(loaded.provider_key, None);
 }
 
 /// Regression for silent data loss: the picker hides the imported jcode session

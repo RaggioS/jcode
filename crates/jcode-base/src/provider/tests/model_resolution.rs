@@ -79,6 +79,9 @@ fn test_openrouter_catalog_model_id_normalizes_bare_openai_and_claude_models() {
 
 #[test]
 fn test_available_models_display_uses_route_models_and_filters_placeholder_rows() {
+    // Route resolution reads the global env/config, so serialize with the tests
+    // that swap JCODE_HOME underneath it.
+    let _guard = crate::storage::lock_test_env();
     let provider = MultiProvider {
         claude: RwLock::new(None),
         anthropic: RwLock::new(None),

@@ -147,7 +147,7 @@ pub(super) async fn run_stream_with_retries(
         let attempt_client = if is_local_endpoint(&api_base) {
             // Local Ollama/LM Studio: force pooled HTTP/1.1 — the HTTP/2 keep-alive
             // cloud client stalls the first connection to loopback for tens of seconds.
-            crate::provider::shared_local_http1_client()
+            jcode_provider_core::shared_local_http1_client()
         } else if attempt == 0 {
             client.clone()
         } else {
@@ -185,7 +185,7 @@ pub(super) async fn run_stream_with_retries(
                     && attempt + 1 < MAX_RETRIES
                     && try_revive_local_ollama().await
                 {
-                    crate::logging::info(
+                    jcode_base::logging::info(
                         "Local Ollama server was down; restarted it in place, retrying.",
                     );
                     last_error = Some(e);
