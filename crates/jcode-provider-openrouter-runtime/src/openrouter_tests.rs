@@ -2613,7 +2613,15 @@ fn loopback_endpoint_enables_reasoning_effort_for_any_model() {
     provider.set_model("gemma4:12b").unwrap();
     assert_eq!(
         provider.available_efforts(),
-        vec!["none", "low", "medium", "high", "max", "swarm", "swarm-deep"]
+        vec![
+            "none",
+            "low",
+            "medium",
+            "high",
+            "max",
+            "swarm",
+            "swarm-deep"
+        ]
     );
     provider
         .set_reasoning_effort("medium")

@@ -849,7 +849,9 @@ mod tests {
         let _guard = crate::storage::lock_test_env();
         // A non-loopback (cloud) OpenAI-compatible profile keeps its routing prefix
         // so cross-provider session restore still selects the right slot.
-        assert!(!MultiProvider::session_provider_is_local_loopback("comtegra"));
+        assert!(!MultiProvider::session_provider_is_local_loopback(
+            "comtegra"
+        ));
         assert_eq!(
             MultiProvider::model_switch_request_for_session_route(
                 "glm-51-nvfp4",

@@ -342,12 +342,10 @@ pub async fn run_user_prompt_capture(
 ) -> Option<String> {
     let command_line = hook_command("user_prompt")?;
 
-    let mut event = HookEvent::new("user_prompt")
-        .session_id(session_id)
-        .field(
-            "USER_MESSAGE",
-            truncate_bytes(user_message, USER_MESSAGE_ENV_LIMIT),
-        );
+    let mut event = HookEvent::new("user_prompt").session_id(session_id).field(
+        "USER_MESSAGE",
+        truncate_bytes(user_message, USER_MESSAGE_ENV_LIMIT),
+    );
     if let Some(cwd) = working_dir {
         event = event.cwd(cwd);
     }
@@ -679,8 +677,7 @@ mod tests {
         }
 
         // Non-zero exit → ignored even if it printed something.
-        let fail =
-            write_executable_script(temp.path(), "fail.sh", "#!/bin/sh\necho x\nexit 3\n");
+        let fail = write_executable_script(temp.path(), "fail.sh", "#!/bin/sh\necho x\nexit 3\n");
         {
             let _env = user_prompt_test_config(&fail.to_string_lossy(), 5000);
             assert_eq!(run_user_prompt_capture("ses_u", None, "q").await, None);

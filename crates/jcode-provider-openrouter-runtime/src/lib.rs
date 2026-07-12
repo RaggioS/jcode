@@ -568,7 +568,10 @@ fn latest_user_message_suggests_reasoning(messages: &[Message]) -> bool {
         return false;
     };
     let lower = text.to_ascii_lowercase();
-    if REASONING_SIGNAL_KEYWORDS.iter().any(|kw| lower.contains(kw)) {
+    if REASONING_SIGNAL_KEYWORDS
+        .iter()
+        .any(|kw| lower.contains(kw))
+    {
         return true;
     }
     let chars = text.chars().count();
