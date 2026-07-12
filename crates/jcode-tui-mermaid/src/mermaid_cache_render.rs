@@ -218,15 +218,11 @@ impl MermaidCache {
         }
 
         let selected = if let Some(min_w) = min_width {
-            if let Some(candidate) = candidates
+            candidates
                 .iter()
                 .filter(|(_, w, _)| cached_width_satisfies(*w, Some(min_w)))
-                .min_by_key(|(_, w, _)| *w)
-            {
-                candidate.clone()
-            } else {
-                return None;
-            }
+                .min_by_key(|(_, w, _)| *w)?
+                .clone()
         } else {
             candidates
                 .iter()
