@@ -315,6 +315,12 @@ cross_provider_failover = "countdown"
 # OpenRouter/OpenAI-compatible). The TUI's client-side stall guard also extends
 # to match this value. Also overridable per-launch via JCODE_STREAM_IDLE_TIMEOUT_SECS.
 # stream_idle_timeout_secs = 600
+# Wall-clock ceiling (seconds) for a one-shot `jcode run` turn. If the headless
+# run doesn't finish within this budget, jcode exits with an error instead of
+# hanging forever. Only the non-interactive `jcode run` path is affected;
+# interactive TUI sessions have no ceiling. Default: 1800 (30 min). Set to 0 to
+# disable. Overridable per-launch via JCODE_RUN_TIMEOUT_SECS.
+# run_timeout_secs = 1800
 
 [agents]
 # Defaults for spawned helper agents (swarm workers, subagents, sidecars).

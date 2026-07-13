@@ -719,6 +719,13 @@ impl Config {
                 }
             }
         }
+        // 0 is a meaningful value here (disables the one-shot `run` ceiling), so
+        // unlike the idle timeout above it is accepted rather than ignored.
+        if let Ok(v) = std::env::var("JCODE_RUN_TIMEOUT_SECS") {
+            if let Ok(parsed) = v.trim().parse::<u64>() {
+                self.provider.run_timeout_secs = parsed;
+            }
+        }
 
         // Copilot premium mode: env var overrides config
         // If set in config but not in env, propagate config -> env
