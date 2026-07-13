@@ -1,16 +1,38 @@
 use std::path::Path;
 
+/// macOS "keep the system awake while a turn is making progress" assertion.
+///
+/// ## Why the assertion is bounded
+///
+/// The assertion used to be created with `IOPMAssertionCreateWithName`, which
+/// never expires: the only release path was `Drop`. A process that wedged
+/// mid-turn (hung provider stream, blocked channel send) therefore held
+/// `PreventUserIdleSystemSleep` forever, and the machine never slept again —
+/// observed in the wild as a single assertion held for 72+ hours, draining the
+/// battery flat overnight.
+///
+/// The assertion is now armed with a bounded TTL, exactly like the sibling
+/// `PowerInhibitor` helper process, and for the reason IOKit itself documents
+/// for `kIOPMAssertionTimeoutKey`: "If your application hangs, or is unable to
+/// complete its assertion task in a reasonable amount of time, specifying a
+/// timeout allows PM to disable your assertion so the system can resume normal
+/// activity." A live turn re-arms the TTL from observable progress (see
+/// `PowerAssertion::refresh`); a wedged one stops re-arming, the timeout fires,
+/// and the machine is free to sleep.
 #[cfg(target_os = "macos")]
 mod macos_power {
+    use crate::power_inhibit::{INHIBIT_REFRESH_AFTER, INHIBIT_TTL, should_refresh};
     use std::ffi::CString;
     use std::os::raw::{c_char, c_void};
+    use std::time::Instant;
 
     type CFStringRef = *const c_void;
+    /// `CFTimeInterval` is a `double` (seconds).
+    type CFTimeInterval = f64;
     type IOPMAssertionID = u32;
     type IOReturn = i32;
 
     const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
-    const K_IOPM_ASSERTION_LEVEL_ON: u32 = 255;
     const K_IO_RETURN_SUCCESS: IOReturn = 0;
 
     #[link(name = "CoreFoundation", kind = "framework")]
@@ -25,10 +47,26 @@ mod macos_power {
 
     #[link(name = "IOKit", kind = "framework")]
     unsafe extern "C" {
-        fn IOPMAssertionCreateWithName(
+        /// Create an assertion with a bounded timeout.
+        ///
+        /// This is the public IOKit entry point that can arm a timeout at
+        /// creation. `IOPMAssertionCreateWithName` (used before) cannot arm one
+        /// at all, and `IOPMAssertionSetTimeout` is private SPI absent from
+        /// `IOPMLib.h`, so it is not an option for us.
+        ///
+        /// `Details`, `HumanReadableReason` and `LocalizationBundlePath` are
+        /// documented as nullable and we pass NULL. `TimeoutAction` is nullable
+        /// too; NULL selects the default `kIOPMAssertionTimeoutActionTurnOff`,
+        /// which drops the assertion *level* when the timeout fires (the ID
+        /// stays valid, so `Drop` still releases it exactly once).
+        fn IOPMAssertionCreateWithDescription(
             assertion_type: CFStringRef,
-            assertion_level: u32,
-            assertion_name: CFStringRef,
+            name: CFStringRef,
+            details: CFStringRef,
+            human_readable_reason: CFStringRef,
+            localization_bundle_path: CFStringRef,
+            timeout: CFTimeInterval,
+            timeout_action: CFStringRef,
             assertion_id: *mut IOPMAssertionID,
         ) -> IOReturn;
         fn IOPMAssertionRelease(assertion_id: IOPMAssertionID) -> IOReturn;
@@ -47,25 +85,81 @@ mod macos_power {
     }
 
     pub struct PowerAssertion {
+        /// `None` when sleep prevention is switched off by config/env. Every
+        /// method is then a no-op and no IOKit assertion is ever created.
+        reason: Option<String>,
         id: Option<IOPMAssertionID>,
+        armed_at: Option<Instant>,
     }
 
     impl PowerAssertion {
         pub fn prevent_user_idle_system_sleep(reason: &str) -> Self {
-            let Some(assertion_type) = cf_string("PreventUserIdleSystemSleep") else {
-                return Self { id: None };
+            let mut assertion = Self {
+                reason: Some(reason.to_string()),
+                id: None,
+                armed_at: None,
             };
-            let Some(assertion_name) = cf_string(reason) else {
+            assertion.arm();
+            assertion
+        }
+
+        /// A no-op assertion for when the user has turned sleep prevention off.
+        pub fn disabled() -> Self {
+            Self {
+                reason: None,
+                id: None,
+                armed_at: None,
+            }
+        }
+
+        /// Heartbeat: re-arm the bounded TTL because the turn made observable
+        /// progress. Callers may invoke this per stream event — it is throttled
+        /// internally and does nothing until `INHIBIT_REFRESH_AFTER` has elapsed.
+        ///
+        /// The re-arm is release + recreate, matching `PowerInhibitor::acquire`.
+        /// Re-arming in place (`IOPMAssertionSetProperty` with
+        /// `kIOPMAssertionTimeoutKey`) would spare two IOKit calls every 90s, but
+        /// costs two more FFI symbols plus `CFNumber` marshalling; at one refresh
+        /// per 90s the saving is not worth the extra unsafe surface.
+        pub fn refresh(&mut self) {
+            if self.reason.is_none() {
+                return;
+            }
+            let now = Instant::now();
+            if self
+                .armed_at
+                .is_some_and(|armed_at| !should_refresh(armed_at, now, INHIBIT_REFRESH_AFTER))
+            {
+                return;
+            }
+            self.arm();
+        }
+
+        /// (Re)create the underlying assertion with a fresh bounded TTL.
+        fn arm(&mut self) {
+            let Some(reason) = self.reason.clone() else {
+                return;
+            };
+            self.release();
+
+            let Some(assertion_type) = cf_string("PreventUserIdleSystemSleep") else {
+                return;
+            };
+            let Some(assertion_name) = cf_string(&reason) else {
                 unsafe { CFRelease(assertion_type) };
-                return Self { id: None };
+                return;
             };
 
             let mut id = 0;
             let result = unsafe {
-                IOPMAssertionCreateWithName(
+                IOPMAssertionCreateWithDescription(
                     assertion_type,
-                    K_IOPM_ASSERTION_LEVEL_ON,
                     assertion_name,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    INHIBIT_TTL.as_secs_f64(),
+                    std::ptr::null(),
                     &mut id,
                 )
             };
@@ -76,14 +170,29 @@ mod macos_power {
 
             if result == K_IO_RETURN_SUCCESS {
                 crate::logging::info(&format!(
-                    "Created macOS sleep-prevention assertion while streaming (id={id})"
+                    "Armed macOS sleep-prevention assertion (id={id}, ttl={}s)",
+                    INHIBIT_TTL.as_secs()
                 ));
-                Self { id: Some(id) }
+                self.id = Some(id);
+                self.armed_at = Some(Instant::now());
             } else {
                 crate::logging::warn(&format!(
-                    "Failed to create macOS sleep-prevention assertion while streaming: IOReturn={result}"
+                    "Failed to arm macOS sleep-prevention assertion: IOReturn={result}"
                 ));
-                Self { id: None }
+                self.id = None;
+                self.armed_at = None;
+            }
+        }
+
+        fn release(&mut self) {
+            self.armed_at = None;
+            if let Some(id) = self.id.take() {
+                let result = unsafe { IOPMAssertionRelease(id) };
+                if result != K_IO_RETURN_SUCCESS {
+                    crate::logging::warn(&format!(
+                        "Failed to release macOS sleep-prevention assertion id={id}: IOReturn={result}"
+                    ));
+                }
             }
         }
 
@@ -95,14 +204,7 @@ mod macos_power {
 
     impl Drop for PowerAssertion {
         fn drop(&mut self) {
-            if let Some(id) = self.id.take() {
-                let result = unsafe { IOPMAssertionRelease(id) };
-                if result != K_IO_RETURN_SUCCESS {
-                    crate::logging::warn(&format!(
-                        "Failed to release macOS sleep-prevention assertion id={id}: IOReturn={result}"
-                    ));
-                }
-            }
+            self.release();
         }
     }
 }
@@ -115,6 +217,12 @@ mod macos_power {
         pub fn prevent_user_idle_system_sleep(_reason: &str) -> Self {
             Self
         }
+
+        pub fn disabled() -> Self {
+            Self
+        }
+
+        pub fn refresh(&mut self) {}
 
         #[cfg(test)]
         pub fn is_active(&self) -> bool {

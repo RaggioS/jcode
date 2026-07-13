@@ -7,6 +7,55 @@ fn desired_nofile_soft_limit_only_raises_when_possible() {
     assert_eq!(desired_nofile_soft_limit(1024, 4096, 8192), Some(4096));
 }
 
+/// The self-heal contract: the heartbeat must come due strictly before the TTL
+/// expires, so a turn that keeps making progress never lapses, while one that
+/// wedges loses the assertion within `INHIBIT_TTL`.
+#[test]
+fn sleep_assertion_ttl_leaves_headroom_for_the_heartbeat() {
+    use crate::power_inhibit::{INHIBIT_REFRESH_AFTER, INHIBIT_TTL, should_refresh};
+    use std::time::Instant;
+
+    assert!(
+        INHIBIT_REFRESH_AFTER < INHIBIT_TTL,
+        "refresh must come due before the assertion expires"
+    );
+
+    let armed_at = Instant::now();
+    assert!(!should_refresh(
+        armed_at,
+        armed_at + INHIBIT_REFRESH_AFTER / 2,
+        INHIBIT_REFRESH_AFTER
+    ));
+    assert!(should_refresh(
+        armed_at,
+        armed_at + INHIBIT_REFRESH_AFTER,
+        INHIBIT_REFRESH_AFTER
+    ));
+}
+
+#[test]
+fn disabled_sleep_assertion_never_holds_sleep_open() {
+    let mut assertion = PowerAssertion::disabled();
+    assert!(!assertion.is_active());
+
+    // A heartbeat on a disabled assertion must stay a no-op and never arm one:
+    // this is the user-facing kill switch, so it cannot come back to life.
+    assertion.refresh();
+    assert!(!assertion.is_active());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn sleep_assertion_stays_held_across_a_heartbeat() {
+    let mut assertion = PowerAssertion::prevent_user_idle_system_sleep("Jcode platform test");
+    assert!(assertion.is_active(), "assertion should arm on macOS");
+
+    // Heartbeating before the refresh threshold elapses is a no-op, but it must
+    // not drop the hold: a live turn keeps the machine awake.
+    assertion.refresh();
+    assert!(assertion.is_active());
+}
+
 #[cfg(unix)]
 #[test]
 fn spawn_detached_creates_new_session() {
