@@ -6,26 +6,78 @@ pub use crate::storage::{
 };
 use crate::storage::{active_pids_dir, register_active_pid, unregister_active_pid};
 
+/// Legacy/global override shared with the desktop app and `PowerInhibitor`:
+/// when set, never hold a sleep assertion.
+const DISABLE_POWER_INHIBIT_ENV: &str = "JCODE_DISABLE_POWER_INHIBIT";
+
+/// Shown by `pmset -g assertions`. The assertion covers the whole turn (model
+/// streaming *and* tool execution), so it does not claim to be about streaming
+/// only — the old name made a tool-heavy or wedged turn look like a stuck
+/// stream.
+const POWER_ASSERTION_REASON: &str = "Jcode active turn (model streaming or tool running)";
+
+/// Whether a turn may hold a sleep assertion at all.
+///
+/// Pure so the precedence is testable without touching the process environment:
+/// the legacy env escape hatch wins over the config toggle, matching
+/// `power_inhibit_available`.
+fn sleep_prevention_enabled(legacy_disable_present: bool, config_enabled: bool) -> bool {
+    !legacy_disable_present && config_enabled
+}
+
 /// RAII guard that marks a session as actively streaming for its lifetime.
 ///
 /// Wraps the on-disk streaming marker from `jcode-storage` (cleared on every
 /// exit path so presence UIs never show a phantom streaming session) and
-/// additionally holds a macOS power assertion so the system does not
-/// idle-sleep in the middle of a streaming model response.
+/// additionally holds a macOS power assertion so the system does not idle-sleep
+/// in the middle of a turn.
+///
+/// The assertion is *not* kept alive merely because a turn object exists: it
+/// carries a bounded TTL and must be re-armed from observable progress via
+/// [`StreamingGuard::record_activity`]. A turn that wedges stops re-arming and
+/// the machine is allowed to sleep again. See `platform::PowerAssertion`.
 pub struct StreamingGuard {
     _marker: crate::storage::StreamingGuard,
-    #[allow(dead_code)]
-    sleep_assertion: crate::platform::PowerAssertion,
+    /// Behind a mutex so the heartbeat is `&self` and callers do not have to
+    /// thread a `&mut` guard through the streaming/tool loops.
+    sleep_assertion: std::sync::Mutex<crate::platform::PowerAssertion>,
 }
 
 impl StreamingGuard {
     pub fn new(session_id: impl Into<String>) -> Self {
+        // Honor the user-facing kill switch on *every* path, including one-shot
+        // `jcode run`, which holds only this guard and no `PowerInhibitor`.
+        let enabled = sleep_prevention_enabled(
+            std::env::var_os(DISABLE_POWER_INHIBIT_ENV).is_some(),
+            crate::config::config().power.prevent_sleep_while_streaming,
+        );
+        let sleep_assertion = if enabled {
+            crate::platform::PowerAssertion::prevent_user_idle_system_sleep(POWER_ASSERTION_REASON)
+        } else {
+            crate::platform::PowerAssertion::disabled()
+        };
         Self {
             _marker: crate::storage::StreamingGuard::new(session_id),
-            sleep_assertion: crate::platform::PowerAssertion::prevent_user_idle_system_sleep(
-                "Jcode streaming model response",
-            ),
+            sleep_assertion: std::sync::Mutex::new(sleep_assertion),
         }
+    }
+
+    /// Heartbeat: the turn made observable progress, so re-arm the assertion's
+    /// bounded TTL. Cheap enough to call per stream event (the refresh itself is
+    /// throttled internally); calling it does *not* extend anything if the turn
+    /// has stopped producing progress.
+    pub fn record_activity(&self) {
+        if let Ok(mut assertion) = self.sleep_assertion.lock() {
+            assertion.refresh();
+        }
+    }
+
+    #[cfg(test)]
+    pub fn sleep_assertion_is_active(&self) -> bool {
+        self.sleep_assertion
+            .lock()
+            .expect("sleep assertion mutex")
+            .is_active()
     }
 }
 use chrono::{DateTime, Utc};
