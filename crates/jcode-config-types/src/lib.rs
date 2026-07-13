@@ -1264,6 +1264,13 @@ pub struct ProviderConfig {
     /// Effort level used by `auto_reasoning_effort` (none|low|medium|high).
     /// Default: medium.
     pub auto_reasoning_effort_level: Option<String>,
+    /// Wall-clock ceiling (seconds) for a one-shot `jcode run` turn. If the
+    /// headless run doesn't finish within this budget it exits with an error
+    /// instead of hanging forever (guards against zombie one-shot processes).
+    /// Interactive TUI sessions are unaffected. Default: 1800 (30 min).
+    /// `0` disables the ceiling. Overridable per-launch via
+    /// `JCODE_RUN_TIMEOUT_SECS`.
+    pub run_timeout_secs: u64,
 }
 
 impl Default for ProviderConfig {
@@ -1285,6 +1292,7 @@ impl Default for ProviderConfig {
             stream_idle_timeout_secs: 180,
             auto_reasoning_effort: false,
             auto_reasoning_effort_level: None,
+            run_timeout_secs: 1800,
         }
     }
 }
