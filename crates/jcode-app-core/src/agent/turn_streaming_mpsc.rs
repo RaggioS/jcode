@@ -83,7 +83,10 @@ impl Agent {
         self.set_log_context();
         // Mark this session as actively streaming for presence UIs (e.g. the
         // macOS menu bar indicator). Cleared automatically on every exit path.
-        let _streaming_guard = crate::session::StreamingGuard::new(self.session.id.clone());
+        //
+        // The guard's sleep assertion is bounded and must be re-armed from real
+        // progress (`record_activity`), not from this turn merely existing.
+        let streaming_guard = crate::session::StreamingGuard::new(self.session.id.clone());
         // Register this turn's cancel signal in the process-global registry so
         // a cancel routed through *any* control handle for this session (even a
         // stale one built for a different agent object, e.g. after a
@@ -361,9 +364,14 @@ impl Agent {
                     event = next_event => event,
                 };
 
+                // Heartbeat hook #1: a provider stream event actually arrived.
+                // Only reached when the stream itself yielded (the keepalive arm
+                // above `continue`s, so a socket that has gone quiet does *not*
+                // count as progress and its assertion is allowed to expire).
                 if activity_mark_last.elapsed() >= std::time::Duration::from_secs(2) {
                     activity_mark_last = Instant::now();
                     crate::session_metrics::record_activity(&self.session.id);
+                    streaming_guard.record_activity();
                 }
                 let Some(event) = event else {
                     log_agent_provider_stream_lifecycle(
@@ -1317,38 +1325,49 @@ impl Agent {
                 let allow_reload_handoff = tc.name == "bash";
                 let tool_result;
                 let mut tool_handle = tool_handle;
-                tokio::select! {
-                    biased;
-                    res = &mut tool_handle => {
-                        tool_result = Some(match res {
-                            Ok(r) => r,
-                            Err(e) => Err(anyhow::anyhow!("Tool task panicked: {}", e)),
-                        });
-                    }
-                    _ = async {
-                        tokio::select! {
-                            _ = bg_signal.notified() => {}
-                            _ = shutdown_signal.notified() => {}
+                // Heartbeat hook #2: tool execution. A legitimately long tool (a
+                // 40-minute build) is real work, so keep re-arming the sleep
+                // assertion while it runs rather than sleeping mid-build.
+                let mut power_heartbeat = power_heartbeat_ticker();
+                loop {
+                    tokio::select! {
+                        biased;
+                        res = &mut tool_handle => {
+                            tool_result = Some(match res {
+                                Ok(r) => r,
+                                Err(e) => Err(anyhow::anyhow!("Tool task panicked: {}", e)),
+                            });
+                            break;
                         }
-                    } => {
-                        if self.is_graceful_shutdown() && allow_reload_handoff {
-                            tool_result = match tokio::time::timeout(
-                                Duration::from_millis(750),
-                                &mut tool_handle,
-                            )
-                            .await
-                            {
-                                Ok(res) => Some(match res {
-                                    Ok(r) => r,
-                                    Err(e) => Err(anyhow::anyhow!("Tool task panicked: {}", e)),
-                                }),
-                                Err(_) => None,
-                            };
-                        } else {
-                            tool_result = None;
+                        _ = async {
+                            tokio::select! {
+                                _ = bg_signal.notified() => {}
+                                _ = shutdown_signal.notified() => {}
+                            }
+                        } => {
+                            if self.is_graceful_shutdown() && allow_reload_handoff {
+                                tool_result = match tokio::time::timeout(
+                                    Duration::from_millis(750),
+                                    &mut tool_handle,
+                                )
+                                .await
+                                {
+                                    Ok(res) => Some(match res {
+                                        Ok(r) => r,
+                                        Err(e) => Err(anyhow::anyhow!("Tool task panicked: {}", e)),
+                                    }),
+                                    Err(_) => None,
+                                };
+                            } else {
+                                tool_result = None;
+                            }
+                            break;
+                        }
+                        _ = power_heartbeat.tick() => {
+                            streaming_guard.record_activity();
                         }
                     }
-                };
+                }
 
                 self.unlock_tools_if_needed(&tc.name);
                 let tool_elapsed = tool_start.elapsed();

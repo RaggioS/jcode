@@ -2201,7 +2201,7 @@ fn streaming_guard_creates_visible_macos_sleep_assertion() {
     let temp = tempfile::tempdir().expect("tempdir");
     let _home = EnvVarGuard::set("JCODE_HOME", temp.path());
 
-    let reason = "Jcode streaming model response";
+    let reason = "Jcode active turn (model streaming or tool running)";
     {
         let _streaming = StreamingGuard::new("session_power");
 
@@ -2226,6 +2226,38 @@ fn streaming_guard_creates_visible_macos_sleep_assertion() {
         !stdout.contains(reason),
         "streaming assertion should be released after guard drop; output was:\n{stdout}"
     );
+}
+
+/// The kill switch must work on the one-shot `jcode run` path too, which holds
+/// only a `StreamingGuard` and no `PowerInhibitor`: before this, there was no
+/// way to stop `jcode run` from creating a sleep assertion.
+#[test]
+fn streaming_guard_honors_legacy_disable_power_inhibit_env() {
+    let _lock = lock_env();
+    let temp = tempfile::tempdir().expect("tempdir");
+    let _home = EnvVarGuard::set("JCODE_HOME", temp.path());
+    let _disabled = EnvVarGuard::set("JCODE_DISABLE_POWER_INHIBIT", "1");
+
+    let streaming = StreamingGuard::new("session_power_disabled");
+
+    assert!(
+        !streaming.sleep_assertion_is_active(),
+        "no sleep assertion may be created when power inhibition is disabled"
+    );
+}
+
+/// The legacy env escape hatch wins over the config toggle, matching
+/// `power_inhibit_available` in `power_inhibit.rs`.
+#[test]
+fn sleep_prevention_requires_config_on_and_no_legacy_disable() {
+    use crate::session::sleep_prevention_enabled;
+
+    assert!(sleep_prevention_enabled(false, true));
+    // Config says off.
+    assert!(!sleep_prevention_enabled(false, false));
+    // Legacy env escape hatch wins regardless of config.
+    assert!(!sleep_prevention_enabled(true, true));
+    assert!(!sleep_prevention_enabled(true, false));
 }
 
 /// Issue #432: `/rewind N` must interpret N against the same numbered list the

@@ -545,6 +545,13 @@ bind_addr = "0.0.0.0"
 # is actively streaming/processing. The display can still sleep; only system
 # suspend is inhibited, and only for as long as work is in flight. (default: true)
 # Set JCODE_DISABLE_POWER_INHIBIT=1 to force-disable regardless of this setting.
+#
+# Self-healing: the hold is never open-ended. It carries a bounded TTL (150s)
+# and is only renewed while the turn makes observable progress — provider stream
+# events arriving, or a tool still running. A jcode process that wedges (hung
+# stream, blocked send) stops renewing it, the hold expires within the TTL, and
+# the machine is free to sleep again. A long build keeps the machine awake; a
+# hung process does not.
 prevent_sleep_while_streaming = true
 
 [safety]
