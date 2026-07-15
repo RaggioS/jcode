@@ -21,3 +21,6 @@ target-ttest*/
 
 # runtime hook logs (churn, not source)
 logs/*.json
+
+# Claude Code agent worktrees (session-local, never source)
+.claude/worktrees/
