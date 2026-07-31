@@ -348,6 +348,61 @@ impl MultiProvider {
         }
     }
 
+    /// True when `provider_key` names an OpenAI-compatible provider whose endpoint
+    /// is loopback (Ollama / LM Studio). Such a server accepts only bare model ids,
+    /// so a restored session must not re-emit the `<provider>:` routing prefix — it
+    /// would reach the loopback endpoint verbatim and be rejected as an invalid
+    /// model name (the bare built-in runtime that serves it does not strip the
+    /// prefix the way the named-profile runtime's `set_model` does). Covers both
+    /// built-in catalog profiles and user `[providers.*]` config entries.
+    fn session_provider_is_local_loopback(provider_key: &str) -> bool {
+        if let Some(profile) =
+            crate::provider_catalog::resolve_openai_compatible_profile_selection(provider_key)
+            && crate::provider_catalog::api_base_uses_localhost(profile.api_base)
+        {
+            return true;
+        }
+        crate::config::config()
+            .providers
+            .get(provider_key)
+            .map(|cfg| crate::provider_catalog::api_base_uses_localhost(&cfg.base_url))
+            .unwrap_or(false)
+    }
+
+    /// Bare model to emit when a restored session belongs to a local loopback
+    /// OpenAI-compatible provider, or `None` when the normal prefixed routing
+    /// applies.
+    ///
+    /// Two ways a loopback session reaches here:
+    /// 1. the stored model already carries the `<profile>:` prefix
+    ///    (`ollama-local:gemma4:12b`) — strip it, because several branches below
+    ///    return such a model verbatim;
+    /// 2. the model is bare but the session's `provider_key` names a loopback
+    ///    profile — keep it bare, because the branches below would re-attach the
+    ///    prefix.
+    ///
+    /// Either way the loopback endpoint must receive the bare model id: the bare
+    /// built-in runtime serving it does not strip the prefix the way the
+    /// named-profile runtime's `set_model` does, so the prefix reaches Ollama
+    /// verbatim and comes back as `400 invalid model name`.
+    fn bare_model_for_local_loopback(model: &str, provider_key: Option<&str>) -> Option<String> {
+        if let Some((prefix, rest)) = model.split_once(':') {
+            let prefix = prefix.trim();
+            let rest = rest.trim();
+            if !prefix.is_empty()
+                && !rest.is_empty()
+                && Self::session_provider_is_local_loopback(prefix)
+            {
+                return Some(rest.to_string());
+            }
+        }
+        provider_key
+            .map(str::trim)
+            .filter(|provider_key| !provider_key.is_empty())
+            .filter(|provider_key| Self::session_provider_is_local_loopback(provider_key))
+            .map(|_| model.to_string())
+    }
+
     pub fn model_switch_request_for_session_model(
         model: &str,
         provider_key: Option<&str>,
@@ -359,6 +414,15 @@ impl MultiProvider {
 
         if crate::provider::explicit_model_provider_prefix(model).is_some() {
             return model.to_string();
+        }
+
+        // Fork patch 7: intercept BEFORE any of the branches below, each of which
+        // either returns a `<profile>:`-prefixed model verbatim or re-attaches the
+        // prefix. Upstream keeps adding return branches here (the bare-provider
+        // `AuthRoute::parse` route arrived with the 2026-07 rebase), so the guard
+        // lives at the top rather than inside any single branch.
+        if let Some(bare) = Self::bare_model_for_local_loopback(model, provider_key) {
+            return bare;
         }
 
         if let Some((prefix, rest)) = model.split_once(':') {
@@ -450,7 +514,15 @@ impl MultiProvider {
                 ModelRouteApiMethod::OpenRouter => return format!("openrouter:{model}"),
                 ModelRouteApiMethod::OpenAiCompatible {
                     profile_id: Some(profile_id),
-                } => return format!("{profile_id}:{model}"),
+                } => {
+                    // Loopback profile (Ollama / LM Studio): emit the bare model so
+                    // the restored session does not leak the `<profile>:` prefix to
+                    // an endpoint that rejects it. See the helper for the rationale.
+                    if Self::session_provider_is_local_loopback(&profile_id) {
+                        return model.to_string();
+                    }
+                    return format!("{profile_id}:{model}");
+                }
                 ModelRouteApiMethod::Copilot => return format!("copilot:{model}"),
                 ModelRouteApiMethod::Cursor => return format!("cursor:{model}"),
                 ModelRouteApiMethod::Bedrock => return format!("bedrock:{model}"),
@@ -878,5 +950,101 @@ mod tests {
             Some(ActiveProvider::OpenRouter)
         );
         assert!(MultiProvider::resolve_config_provider_selection("unknown", &cfg).is_none());
+    }
+
+    #[test]
+    fn session_restore_emits_bare_model_for_local_loopback_profile() {
+        // Serialize with the other tests that swap JCODE_HOME: this reads the global
+        // config to resolve `[providers.*]` entries.
+        let _guard = crate::storage::lock_test_env();
+        // The built-in Ollama profile is loopback (http://localhost:11434/v1), so a
+        // restored session routed to it must NOT re-emit the `<profile>:` prefix —
+        // the loopback endpoint would reject `ollama:gemma4:12b` as an invalid model
+        // name. Emit the bare model instead.
+        assert!(MultiProvider::session_provider_is_local_loopback("ollama"));
+        assert_eq!(
+            MultiProvider::model_switch_request_for_session_route(
+                "gemma4:12b",
+                None,
+                Some("openai-compatible:ollama"),
+            ),
+            "gemma4:12b"
+        );
+    }
+
+    #[test]
+    fn session_restore_keeps_prefix_for_remote_openai_compatible_profile() {
+        // Serialize with the other tests that swap JCODE_HOME: this reads the global
+        // config to resolve `[providers.*]` entries.
+        let _guard = crate::storage::lock_test_env();
+        // A non-loopback (cloud) OpenAI-compatible profile keeps its routing prefix
+        // so cross-provider session restore still selects the right slot.
+        assert!(!MultiProvider::session_provider_is_local_loopback(
+            "comtegra"
+        ));
+        assert_eq!(
+            MultiProvider::model_switch_request_for_session_route(
+                "glm-51-nvfp4",
+                Some("comtegra"),
+                Some("openai-compatible:comtegra"),
+            ),
+            "comtegra:glm-51-nvfp4"
+        );
+    }
+
+    /// Regression (2026-07 upstream rebase): `model_switch_request_for_session_model`
+    /// grew return branches that emit or pass through a `<profile>:` prefix without
+    /// consulting the loopback guard, which only lived inside one arm of
+    /// `..._route`. A session restored through any of those paths leaked
+    /// `ollama:gemma4:12b` to the loopback endpoint and got `400 invalid model
+    /// name` — the exact bug patch 7 exists to prevent.
+    #[test]
+    fn session_restore_never_leaks_loopback_prefix_through_model_switch_request() {
+        let _guard = crate::storage::lock_test_env();
+
+        // Bare model + loopback provider_key: must not gain a prefix.
+        assert_eq!(
+            MultiProvider::model_switch_request_for_session_model("gemma4:12b", Some("ollama")),
+            "gemma4:12b"
+        );
+
+        // Already-prefixed stored model: the prefix must be stripped, not passed
+        // through verbatim.
+        assert_eq!(
+            MultiProvider::model_switch_request_for_session_model(
+                "ollama:gemma4:12b",
+                Some("ollama")
+            ),
+            "gemma4:12b"
+        );
+        assert_eq!(
+            MultiProvider::model_switch_request_for_session_model("ollama:gemma4:12b", None),
+            "gemma4:12b"
+        );
+
+        // Route methods that fall through to `..._model` (no profile-scoped arm)
+        // are covered by the same guard.
+        assert_eq!(
+            MultiProvider::model_switch_request_for_session_route(
+                "gemma4:12b",
+                Some("ollama"),
+                Some("openai-compatible"),
+            ),
+            "gemma4:12b"
+        );
+
+        // A remote profile is untouched: cross-provider restore keeps routing.
+        assert_eq!(
+            MultiProvider::model_switch_request_for_session_model("glm-51-nvfp4", Some("comtegra")),
+            "comtegra:glm-51-nvfp4"
+        );
+        // ...and an explicit credential pin still wins over everything.
+        assert_eq!(
+            MultiProvider::model_switch_request_for_session_model(
+                "claude-oauth:claude-opus-4-6",
+                Some("ollama")
+            ),
+            "claude-oauth:claude-opus-4-6"
+        );
     }
 }
