@@ -396,11 +396,9 @@ fn convert_content_blocks(content: &ClaudeCodeContent) -> Vec<ContentBlock> {
                     text: text.clone(),
                     cache_control: None,
                 }),
-                ClaudeCodeContentBlock::Thinking { thinking, .. } => {
-                    Some(ContentBlock::Reasoning {
-                        text: thinking.clone(),
-                    })
-                }
+                // Drop Claude's hidden reasoning: the local model does not need
+                // it and it would cost tokens on every resumed turn.
+                ClaudeCodeContentBlock::Thinking { .. } => None,
                 ClaudeCodeContentBlock::ToolUse { id, name, input } => {
                     Some(ContentBlock::ToolUse {
                         id: id.clone(),
@@ -415,7 +413,7 @@ fn convert_content_blocks(content: &ClaudeCodeContent) -> Vec<ContentBlock> {
                     is_error,
                 } => Some(ContentBlock::ToolResult {
                     tool_use_id: tool_use_id.clone(),
-                    content: content.clone(),
+                    content: truncate_import_text(content.clone(), MAX_IMPORT_TOOL_RESULT_BYTES),
                     is_error: *is_error,
                 }),
                 ClaudeCodeContentBlock::Unknown => None,
@@ -780,11 +778,6 @@ fn import_session_from_file_with_target(
     // Extract metadata from entries
     let first_entry = ordered_entries.first().copied();
     let working_dir = first_entry.and_then(|e| e.cwd.clone());
-    // Get model from first assistant message (user messages don't have model)
-    let model = ordered_entries
-        .iter()
-        .find(|e| e.entry_type == "assistant")
-        .and_then(|e| e.message.as_ref()?.model.clone());
     let created_at = first_entry
         .and_then(|e| e.timestamp.as_ref())
         .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
@@ -811,49 +804,122 @@ fn import_session_from_file_with_target(
                 .and_then(|s| s.summary.or(Some(s.first_prompt)))
         });
 
-    // Convert messages from the external transcript.
-    let mut imported_messages: Vec<StoredMessage> = Vec::new();
+    // Collect conversation messages, skipping Claude's transcript-only bookkeeping
+    // (meta / visible-only / compaction summaries) but capturing the latest
+    // compaction summary and the user-prompt thread for a recap.
+    let mut compact_summary: Option<String> = None;
+    let mut user_prompts: Vec<String> = Vec::new();
+    let mut collected: Vec<StoredMessage> = Vec::new();
     for entry in ordered_entries {
-        if let Some(ref msg) = entry.message {
-            let role = match msg.role.as_str() {
-                "user" => Role::User,
-                "assistant" => Role::Assistant,
-                _ => continue,
-            };
-
-            let content_blocks = convert_content_blocks(&msg.content);
-
-            // Skip empty messages
-            if content_blocks.is_empty() {
-                continue;
+        if entry.is_compact_summary {
+            if let Some(ref msg) = entry.message {
+                let text = claude_content_plain_text(&msg.content);
+                if !text.trim().is_empty() {
+                    compact_summary = Some(text);
+                }
             }
-
-            // Generate message ID from uuid or create new
-            let msg_id = entry
-                .uuid
-                .clone()
-                .unwrap_or_else(|| crate::id::new_id("msg"));
-
-            imported_messages.push(StoredMessage {
-                id: msg_id,
-                role,
-                content: content_blocks,
-                display_role: None,
-                timestamp: None,
-                tool_duration_ms: None,
-                token_usage: None,
-            });
+            continue;
         }
+        if entry.is_meta || entry.is_visible_in_transcript_only {
+            continue;
+        }
+        let Some(ref msg) = entry.message else {
+            continue;
+        };
+        let role = match msg.role.as_str() {
+            "user" => Role::User,
+            "assistant" => Role::Assistant,
+            _ => continue,
+        };
+
+        let content_blocks = convert_content_blocks(&msg.content);
+        if content_blocks.is_empty() {
+            continue;
+        }
+
+        // Collect genuine user prompts (text only, not tool results) for the
+        // fallback recap when there is no compaction summary.
+        if matches!(role, Role::User)
+            && !content_blocks
+                .iter()
+                .any(|b| matches!(b, ContentBlock::ToolResult { .. }))
+        {
+            let text: String = content_blocks
+                .iter()
+                .filter_map(|b| match b {
+                    ContentBlock::Text { text, .. } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            let text = text.trim();
+            if !text.is_empty() && !text.starts_with("<system-reminder>") {
+                user_prompts.push(truncate_import_text(
+                    text.to_string(),
+                    MAX_IMPORT_RECAP_PROMPT_BYTES,
+                ));
+            }
+        }
+
+        let msg_id = entry
+            .uuid
+            .clone()
+            .unwrap_or_else(|| crate::id::new_id("msg"));
+        collected.push(StoredMessage {
+            id: msg_id,
+            role,
+            content: content_blocks,
+            display_role: None,
+            timestamp: None,
+            tool_duration_ms: None,
+            token_usage: None,
+        });
     }
 
+    // Keep only the most recent messages within a context budget; the recap
+    // covers everything older so the offline model is not handed a transcript
+    // that overflows its window.
+    let dropped = truncate_messages_to_recent_budget(&mut collected, IMPORT_RECENT_CHAR_BUDGET);
+    let recap = build_import_recap(compact_summary.as_deref(), &user_prompts, dropped);
+
+    // NOTE (fork): the "don't clobber a jcode-side continuation" guard this patch
+    // used to carry here is gone — upstream's `finalize_imported_session` now does
+    // exactly that check (`session_exists` + `existing.messages.len() >
+    // session.messages.len()`) for every importer, and it compares the fully built
+    // session, so the recap message is counted the same way our local
+    // `imported_len` did. Keeping ours would have duplicated it.
+
+    // Create the jcode session. Leave provider_key and model UNSET (None): the
+    // transcript records Claude's provider/model, but on the offline lane we
+    // want resume to adopt the RUNTIME provider/model (e.g. the launcher's
+    // ollama/gemma4). `restore_session` fills `session.model` from the live
+    // provider when it is None, and a non-None provider_key here would route the
+    // model name wrong (e.g. "ollama-local:gemma4:12b" -> Ollama 400 "invalid
+    // model name"). `provider_session_id` still records the Claude Code origin.
+    // This also applies to upstream's live-takeover path, which stops the Claude
+    // process and hands the conversation to a normal jcode session — so adopting
+    // the runtime provider is the right behavior there too.
     let mut session = Session::create_with_id(jcode_session_id, None, title);
     session.provider_session_id = Some(session_id.to_string());
-    session.provider_key = Some("claude-code".to_string());
     session.working_dir = working_dir;
-    session.model = model;
     session.created_at = created_at;
 
-    for message in imported_messages {
+    // Prepend a recap when we have a compaction summary or had to drop history.
+    if let Some(recap) = recap {
+        session.append_stored_message(StoredMessage {
+            id: crate::id::new_id("msg"),
+            role: Role::User,
+            content: vec![ContentBlock::Text {
+                text: recap,
+                cache_control: None,
+            }],
+            display_role: None,
+            timestamp: None,
+            tool_duration_ms: None,
+            token_usage: None,
+        });
+    }
+    for message in collected {
         session.append_stored_message(message);
     }
 
@@ -972,6 +1038,94 @@ fn take_over_live_claude_session_with_timeout(
     Ok(ResumeTarget::JcodeSession {
         session_id: takeover_id,
     })
+}
+
+/// ~80k tokens (≈ a third of gemma4's 262k window), estimated as chars / 4.
+const IMPORT_RECENT_CHAR_BUDGET: usize = 320_000;
+const MAX_IMPORT_TOOL_RESULT_BYTES: usize = 3_000;
+const MAX_IMPORT_RECAP_PROMPTS: usize = 40;
+const MAX_IMPORT_RECAP_PROMPT_BYTES: usize = 300;
+
+fn claude_content_plain_text(content: &ClaudeCodeContent) -> String {
+    match content {
+        ClaudeCodeContent::Empty => String::new(),
+        ClaudeCodeContent::Text(t) => t.clone(),
+        ClaudeCodeContent::Blocks(blocks) => blocks
+            .iter()
+            .filter_map(|b| match b {
+                ClaudeCodeContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+    }
+}
+
+fn stored_message_chars(m: &StoredMessage) -> usize {
+    m.content
+        .iter()
+        .map(|b| match b {
+            ContentBlock::Text { text, .. } => text.len(),
+            ContentBlock::ToolResult { content, .. } => content.len(),
+            ContentBlock::ToolUse { name, input, .. } => name.len() + input.to_string().len(),
+            _ => 0,
+        })
+        .sum()
+}
+
+/// Drop messages from the FRONT until the cumulative size fits the budget (keep
+/// at least the most recent), then trim a leading orphan `tool_result` whose
+/// `tool_use` was dropped. Returns how many messages were removed.
+fn truncate_messages_to_recent_budget(
+    messages: &mut Vec<StoredMessage>,
+    char_budget: usize,
+) -> usize {
+    let mut total: usize = messages.iter().map(stored_message_chars).sum();
+    let mut dropped = 0;
+    while messages.len() > 1 && total > char_budget {
+        total = total.saturating_sub(stored_message_chars(&messages[0]));
+        messages.remove(0);
+        dropped += 1;
+    }
+    while messages.len() > 1
+        && messages[0]
+            .content
+            .iter()
+            .any(|b| matches!(b, ContentBlock::ToolResult { .. }))
+    {
+        messages.remove(0);
+        dropped += 1;
+    }
+    dropped
+}
+
+fn build_import_recap(summary: Option<&str>, prompts: &[String], dropped: usize) -> Option<String> {
+    let body = if let Some(s) = summary.map(str::trim).filter(|s| !s.is_empty()) {
+        s.to_string()
+    } else if dropped > 0 && !prompts.is_empty() {
+        let start = prompts.len().saturating_sub(MAX_IMPORT_RECAP_PROMPTS);
+        let mut out = String::from("Earlier conversation (user requests, oldest→newest):\n");
+        for p in &prompts[start..] {
+            out.push_str("- ");
+            out.push_str(p);
+            out.push('\n');
+        }
+        out
+    } else {
+        return None;
+    };
+    let note = if dropped > 0 {
+        format!(
+            "\n\n({dropped} older message(s) omitted to fit the context window; covered by the recap above.)"
+        )
+    } else {
+        String::new()
+    };
+    Some(format!(
+        "[Imported from Claude Code — continuing offline with the local model.]\n\n\
+         Recap of the work so far:\n\n{body}{note}\n\n\
+         --- recent conversation context below ---"
+    ))
 }
 
 fn append_text_message(
