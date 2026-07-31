@@ -203,6 +203,37 @@ fn test_env_override_swarm_model() {
 }
 
 #[test]
+fn test_env_override_run_timeout_secs() {
+    let _guard = crate::storage::lock_test_env();
+    let prev = std::env::var_os("JCODE_RUN_TIMEOUT_SECS");
+
+    // Default is a 30-minute wall-clock ceiling.
+    assert_eq!(Config::default().provider.run_timeout_secs, 1800);
+
+    // A positive override wins.
+    crate::env::set_var("JCODE_RUN_TIMEOUT_SECS", "60");
+    let mut cfg = Config::default();
+    cfg.apply_env_overrides();
+    assert_eq!(cfg.provider.run_timeout_secs, 60);
+
+    // 0 is meaningful: it disables the ceiling (must not be ignored like the
+    // idle timeout's 0).
+    crate::env::set_var("JCODE_RUN_TIMEOUT_SECS", "0");
+    let mut cfg = Config::default();
+    cfg.apply_env_overrides();
+    assert_eq!(cfg.provider.run_timeout_secs, 0);
+
+    // Garbage is ignored, leaving the configured value untouched.
+    crate::env::set_var("JCODE_RUN_TIMEOUT_SECS", "not-a-number");
+    let mut cfg = Config::default();
+    cfg.provider.run_timeout_secs = 900;
+    cfg.apply_env_overrides();
+    assert_eq!(cfg.provider.run_timeout_secs, 900);
+
+    restore_env_var("JCODE_RUN_TIMEOUT_SECS", prev);
+}
+
+#[test]
 fn spawn_hook_defaults_to_none_and_parses_from_toml() {
     assert_eq!(Config::default().terminal.spawn_hook, None);
 

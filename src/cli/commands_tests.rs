@@ -515,6 +515,21 @@ fn run_auto_poke_followup_rechecks_completion_confidence_until_it_passes() {
 }
 
 #[test]
+fn wall_clock_timeout_from_secs_disables_on_zero() {
+    // 0 = no ceiling (a deliberately unbounded run).
+    assert_eq!(wall_clock_timeout_from_secs(0), None);
+    // Any positive value becomes a concrete ceiling.
+    assert_eq!(
+        wall_clock_timeout_from_secs(1800),
+        Some(std::time::Duration::from_secs(1800))
+    );
+    assert_eq!(
+        wall_clock_timeout_from_secs(1),
+        Some(std::time::Duration::from_secs(1))
+    );
+}
+
+#[test]
 fn cli_provider_choice_filter_uses_typed_api_methods() {
     let routes = vec![
         test_route("claude-opus-4-6", "Anthropic", "claude-oauth"),

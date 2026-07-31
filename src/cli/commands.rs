@@ -2401,23 +2401,63 @@ pub async fn run_single_message_command(
     let mut agent = crate::agent::Agent::new(provider.clone(), registry);
     restore_agent_session_if_requested(&mut agent, resume_session)?;
 
-    if emit_json {
-        let text = run_single_message_command_capture_with_auto_poke(&mut agent, message).await?;
-        let report = RunCommandReport {
-            session_id: agent.session_id().to_string(),
-            provider: provider.name().to_string(),
-            model: provider.model(),
-            text,
-            usage: agent.last_usage().clone(),
-        };
-        println!("{}", serde_json::to_string_pretty(&report)?);
-    } else if emit_ndjson {
-        run_single_message_command_ndjson(&mut agent, provider.clone(), message).await?;
-    } else {
-        run_single_message_command_plain_with_auto_poke(&mut agent, message).await?;
+    // The whole turn execution (including the auto-poke follow-up loop) runs
+    // under a single wall-clock ceiling so a stuck one-shot `jcode run` exits
+    // with an error instead of turning into a zombie process. On timeout we
+    // return an Err through `main` rather than `process::exit`, so RAII guards
+    // (streaming marker, power assertion, session lock) drop cleanly.
+    let dispatch = async {
+        if emit_json {
+            let text =
+                run_single_message_command_capture_with_auto_poke(&mut agent, message).await?;
+            let report = RunCommandReport {
+                session_id: agent.session_id().to_string(),
+                provider: provider.name().to_string(),
+                model: provider.model(),
+                text,
+                usage: agent.last_usage().clone(),
+            };
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        } else if emit_ndjson {
+            run_single_message_command_ndjson(&mut agent, provider.clone(), message).await?;
+        } else {
+            run_single_message_command_plain_with_auto_poke(&mut agent, message).await?;
+        }
+        Ok::<(), anyhow::Error>(())
+    };
+
+    match run_command_wall_clock_timeout() {
+        Some(budget) => match tokio::time::timeout(budget, dispatch).await {
+            Ok(result) => result?,
+            Err(_) => {
+                let secs = budget.as_secs();
+                eprintln!(
+                    "jcode run: aborted after {secs}s wall-clock ceiling. \
+                     Raise or disable it via JCODE_RUN_TIMEOUT_SECS or \
+                     [provider] run_timeout_secs (0 disables the ceiling)."
+                );
+                anyhow::bail!("jcode run timed out after {secs}s");
+            }
+        },
+        None => dispatch.await?,
     }
 
     Ok(())
+}
+
+/// Wall-clock ceiling for a one-shot `jcode run` turn. Resolved from
+/// `[provider] run_timeout_secs` / `JCODE_RUN_TIMEOUT_SECS` (default 1800).
+/// Returns `None` when the value is `0`, which disables the ceiling. Only the
+/// headless `jcode run` path consults this; interactive TUI sessions are never
+/// bounded here.
+fn run_command_wall_clock_timeout() -> Option<std::time::Duration> {
+    wall_clock_timeout_from_secs(crate::config::config().provider.run_timeout_secs)
+}
+
+/// Map a configured budget in seconds to an optional duration: `0` disables the
+/// ceiling (`None`), any positive value becomes a concrete `Duration`.
+fn wall_clock_timeout_from_secs(secs: u64) -> Option<std::time::Duration> {
+    (secs > 0).then(|| std::time::Duration::from_secs(secs))
 }
 
 fn run_command_auto_poke_enabled() -> bool {
