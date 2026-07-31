@@ -19,7 +19,11 @@ impl Agent {
         crate::session_metrics::record_turn(&self.session.id);
         // Mark this session as actively streaming for presence UIs (e.g. the
         // macOS menu bar indicator). Cleared automatically on every exit path.
-        let _streaming_guard = crate::session::StreamingGuard::new(self.session.id.clone());
+        //
+        // The guard's sleep assertion is bounded: it must be re-armed from real
+        // progress (`record_activity`), not from this turn merely existing, so a
+        // wedged one-shot run stops holding the machine awake.
+        let streaming_guard = crate::session::StreamingGuard::new(self.session.id.clone());
         // Register this turn's cancel signal so session-level cancels reach
         // this in-flight turn even through stale control handles (issue #428).
         let _turn_cancel_guard = crate::turn_cancel_registry::register_active_turn(
@@ -196,6 +200,11 @@ impl Agent {
 
             let mut retry_after_compaction = false;
             while let Some(event) = stream.next().await {
+                // Heartbeat hook #1: a chunk actually arrived from the provider.
+                // This is the only signal that distinguishes a live stream from a
+                // wedged one, so it — not the turn's existence — is what keeps the
+                // machine awake. Self-throttled, so per-event is fine.
+                streaming_guard.record_activity();
                 let event = match event {
                     Ok(event) => event,
                     Err(e) => {
@@ -994,7 +1003,20 @@ impl Agent {
                     model: Some(self.provider.model()),
                 }));
 
-                let result = self.registry.execute(&tc.name, tc.input.clone(), ctx).await;
+                // Heartbeat hook #2: tool execution. A legitimately long tool (a
+                // 40-minute build) is real work, so keep re-arming the assertion
+                // while it runs instead of letting the machine sleep mid-build.
+                let result = {
+                    let mut execution =
+                        std::pin::pin!(self.registry.execute(&tc.name, tc.input.clone(), ctx));
+                    let mut heartbeat = power_heartbeat_ticker();
+                    loop {
+                        tokio::select! {
+                            result = &mut execution => break result,
+                            _ = heartbeat.tick() => streaming_guard.record_activity(),
+                        }
+                    }
+                };
                 crate::telemetry::record_tool_call();
                 self.unlock_tools_if_needed(&tc.name);
                 let tool_elapsed = tool_start.elapsed();

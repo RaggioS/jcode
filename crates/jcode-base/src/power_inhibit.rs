@@ -31,11 +31,14 @@ const DISABLE_ENV: &str = "JCODE_DISABLE_POWER_INHIBIT";
 
 /// How long each spawned helper holds the lock before it must be refreshed.
 /// Bounding this is what makes orphaned locks self-heal after a crash/reload.
-const INHIBIT_TTL: Duration = Duration::from_secs(150);
+///
+/// Shared with the macOS `PowerAssertion` in `platform.rs`, which arms the same
+/// bounded TTL on its IOKit assertion for the same reason.
+pub(crate) const INHIBIT_TTL: Duration = Duration::from_secs(150);
 
 /// Refresh once the current helper has been held longer than this. Kept well
 /// below `INHIBIT_TTL` so coverage never lapses between reconcile ticks.
-const INHIBIT_REFRESH_AFTER: Duration = Duration::from_secs(90);
+pub(crate) const INHIBIT_REFRESH_AFTER: Duration = Duration::from_secs(90);
 
 /// Best-effort inhibitor that keeps the machine awake while jcode is actively
 /// streaming/processing.
@@ -188,8 +191,10 @@ fn child_is_running(child: &mut Child) -> bool {
     matches!(child.try_wait(), Ok(None))
 }
 
-/// Whether a helper acquired at `acquired_at` should be refreshed by `now`.
-fn should_refresh(acquired_at: Instant, now: Instant, refresh_after: Duration) -> bool {
+/// Whether a hold acquired at `acquired_at` should be refreshed by `now`.
+///
+/// Shared with the macOS `PowerAssertion` heartbeat in `platform.rs`.
+pub(crate) fn should_refresh(acquired_at: Instant, now: Instant, refresh_after: Duration) -> bool {
     now.saturating_duration_since(acquired_at) >= refresh_after
 }
 
