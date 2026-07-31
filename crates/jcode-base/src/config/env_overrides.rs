@@ -442,9 +442,15 @@ impl Config {
         hook_env_override(&mut self.hooks.session_end, "JCODE_HOOK_SESSION_END");
         hook_env_override(&mut self.hooks.pre_tool, "JCODE_HOOK_PRE_TOOL");
         hook_env_override(&mut self.hooks.post_tool, "JCODE_HOOK_POST_TOOL");
+        hook_env_override(&mut self.hooks.user_prompt, "JCODE_HOOK_USER_PROMPT");
         if let Ok(v) = std::env::var("JCODE_HOOK_PRE_TOOL_TIMEOUT_MS") {
             if let Ok(parsed) = v.trim().parse::<u64>() {
                 self.hooks.pre_tool_timeout_ms = parsed;
+            }
+        }
+        if let Ok(v) = std::env::var("JCODE_HOOK_USER_PROMPT_TIMEOUT_MS") {
+            if let Ok(parsed) = v.trim().parse::<u64>() {
+                self.hooks.user_prompt_timeout_ms = parsed;
             }
         }
 
@@ -745,6 +751,13 @@ impl Config {
                 if parsed > 0 {
                     self.provider.stream_idle_timeout_secs = parsed;
                 }
+            }
+        }
+        // 0 is a meaningful value here (disables the one-shot `run` ceiling), so
+        // unlike the idle timeout above it is accepted rather than ignored.
+        if let Ok(v) = std::env::var("JCODE_RUN_TIMEOUT_SECS") {
+            if let Ok(parsed) = v.trim().parse::<u64>() {
+                self.provider.run_timeout_secs = parsed;
             }
         }
 

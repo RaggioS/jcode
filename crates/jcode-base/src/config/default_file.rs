@@ -374,6 +374,12 @@ cross_provider_failover = "countdown"
 # This is the base budget: high reasoning efforts scale it up automatically
 # (high 2x, xhigh 3x, max/swarm 4x) since they think silently for much longer.
 # stream_idle_timeout_secs = 600
+# Wall-clock ceiling (seconds) for a one-shot `jcode run` turn. If the headless
+# run doesn't finish within this budget, jcode exits with an error instead of
+# hanging forever. Only the non-interactive `jcode run` path is affected;
+# interactive TUI sessions have no ceiling. Default: 1800 (30 min). Set to 0 to
+# disable. Overridable per-launch via JCODE_RUN_TIMEOUT_SECS.
+# run_timeout_secs = 1800
 
 [agents]
 # Defaults for spawned helper agents (swarm workers, subagents, sidecars).
@@ -601,6 +607,13 @@ bind_addr = "0.0.0.0"
 # and power-button actions from your active power plan. The display may sleep.
 # The guard is held only for as long as work is in flight. (default: true)
 # Set JCODE_DISABLE_POWER_INHIBIT=1 to force-disable regardless of this setting.
+#
+# Self-healing: the hold is never open-ended. It carries a bounded TTL (150s)
+# and is only renewed while the turn makes observable progress — provider stream
+# events arriving, or a tool still running. A jcode process that wedges (hung
+# stream, blocked send) stops renewing it, the hold expires within the TTL, and
+# the machine is free to sleep again. A long build keeps the machine awake; a
+# hung process does not.
 prevent_sleep_while_streaming = true
 
 [safety]

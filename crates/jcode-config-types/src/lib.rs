@@ -787,9 +787,19 @@ pub struct HooksConfig {
     /// Fields: TOOL_NAME, STATUS ("ok"/"error"), DURATION_MS, OUTPUT_BYTES.
     /// Env override: JCODE_HOOK_POST_TOOL.
     pub post_tool: Option<String>,
+    /// Capturing hook run before each user turn. Receives the user message on
+    /// stdin (also truncated in USER_MESSAGE). On exit 0 its stdout is injected
+    /// into the conversation as extra context ahead of the user message (e.g.
+    /// post-cutoff knowledge grounding); empty stdout or any non-zero exit
+    /// injects nothing. Unlike `pre_tool` it never blocks the turn.
+    /// Env override: JCODE_HOOK_USER_PROMPT.
+    pub user_prompt: Option<String>,
     /// Max milliseconds to wait for the pre_tool gate before failing open
     /// (default: 5000). Env override: JCODE_HOOK_PRE_TOOL_TIMEOUT_MS.
     pub pre_tool_timeout_ms: u64,
+    /// Max milliseconds to wait for the user_prompt capturing hook before
+    /// skipping it (default: 5000). Env override: JCODE_HOOK_USER_PROMPT_TIMEOUT_MS.
+    pub user_prompt_timeout_ms: u64,
 }
 
 impl Default for HooksConfig {
@@ -801,7 +811,9 @@ impl Default for HooksConfig {
             session_end: None,
             pre_tool: None,
             post_tool: None,
+            user_prompt: None,
             pre_tool_timeout_ms: 5000,
+            user_prompt_timeout_ms: 5000,
         }
     }
 }
@@ -1337,6 +1349,21 @@ pub struct ProviderConfig {
     /// automatically (see `jcode_base::provider::stream_idle_timeout_for_effort`).
     /// Default: 180. Overridable via `JCODE_STREAM_IDLE_TIMEOUT_SECS`.
     pub stream_idle_timeout_secs: u64,
+    /// Local lane only: auto-raise reasoning effort for a turn whose latest user
+    /// message looks complex (architecture, debugging, multi-step). Acts purely
+    /// per-request and only when effort is otherwise off and the endpoint is
+    /// loopback, so a manual effort change always wins. Default: false.
+    pub auto_reasoning_effort: bool,
+    /// Effort level used by `auto_reasoning_effort` (none|low|medium|high).
+    /// Default: medium.
+    pub auto_reasoning_effort_level: Option<String>,
+    /// Wall-clock ceiling (seconds) for a one-shot `jcode run` turn. If the
+    /// headless run doesn't finish within this budget it exits with an error
+    /// instead of hanging forever (guards against zombie one-shot processes).
+    /// Interactive TUI sessions are unaffected. Default: 1800 (30 min).
+    /// `0` disables the ceiling. Overridable per-launch via
+    /// `JCODE_RUN_TIMEOUT_SECS`.
+    pub run_timeout_secs: u64,
 }
 
 impl Default for ProviderConfig {
@@ -1356,6 +1383,9 @@ impl Default for ProviderConfig {
             copilot_premium: None,
             model_picker_providers: None,
             stream_idle_timeout_secs: 180,
+            auto_reasoning_effort: false,
+            auto_reasoning_effort_level: None,
+            run_timeout_secs: 1800,
         }
     }
 }
